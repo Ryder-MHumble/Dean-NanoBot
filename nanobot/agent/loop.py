@@ -106,6 +106,10 @@ class AgentLoop:
         # Cron tool (for scheduling)
         if self.cron_service:
             self.tools.register(CronTool(self.cron_service))
+
+        # Screenshot tool
+        from nanobot.agent.tools.screenshot import ScreenshotTool
+        self.tools.register(ScreenshotTool(workspace=self.workspace))
     
     async def run(self) -> None:
         """Run the agent loop, processing messages from the bus."""

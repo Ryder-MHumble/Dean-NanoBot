@@ -201,12 +201,26 @@ class DingTalkChannel(BaseChannel):
 
         headers = {"x-acs-dingtalk-access-token": token}
 
+        # Handle message content
+        content = msg.content
+
+        # If there are media files, append file path information to the message
+        if msg.media and len(msg.media) > 0:
+            content += "\n\n📎 **附件**:\n"
+            for media_path in msg.media:
+                # Display friendly filename
+                from pathlib import Path
+                filename = Path(media_path).name
+                content += f"- {filename} (路径: {media_path})\n"
+
+            content += "\n💡 图片已保存到本地，可以在上述路径查看。"
+
         data = {
             "robotCode": self.config.client_id,
             "userIds": [msg.chat_id],  # chat_id is the user's staffId
             "msgKey": "sampleMarkdown",
             "msgParam": json.dumps({
-                "text": msg.content,
+                "text": content,
                 "title": "Nanobot Reply",
             }),
         }

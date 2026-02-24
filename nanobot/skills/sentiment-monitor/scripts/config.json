@@ -1,0 +1,45 @@
+{
+  "mediacrawler_path": "/Users/sunminghao/Desktop/MediaCrawler",
+  "data_path": "/Users/sunminghao/Desktop/MediaCrawler/data",
+  "keywords": ["中关村两院", "中关村人工智能研究院", "北京中关村学院"],
+  "platforms": ["xhs", "douyin", "bili", "wb"],
+  "platform_names": {
+    "xhs": "Xiaohongshu",
+    "douyin": "Douyin",
+    "bili": "Bilibili",
+    "wb": "Weibo"
+  },
+  "platform_names_cn": {
+    "xhs": "小红书",
+    "douyin": "抖音",
+    "bili": "B站",
+    "wb": "微博"
+  },
+  "sentiment_keywords": {
+    "positive": [
+      "优秀", "很好", "专业", "领先", "创新", "推荐", "值得", "满意", "赞",
+      "棒", "厉害", "牛", "强", "顶", "支持", "喜欢", "爱了", "太好了",
+      "完美", "精彩", "出色", "卓越", "一流", "高水平", "有实力"
+    ],
+    "negative": [
+      "问题", "担心", "失望", "不满", "投诉", "质疑", "差", "坑", "骗",
+      "糟糕", "垃圾", "失败", "烂", "后悔", "不推荐", "慎重", "小心",
+      "骗人", "忽悠", "不靠谱", "不行", "不好", "太差"
+    ]
+  },
+  "risk_keywords": [
+    "投诉", "举报", "欺骗", "骗局", "虚假", "误导", "不实", "造假",
+    "违规", "违法", "侵权", "纠纷", "诉讼", "赔偿", "退款",
+    "危险", "风险", "威胁", "伤害", "事故"
+  ],
+  "thresholds": {
+    "high_engagement_likes_xhs": 500,
+    "high_engagement_likes_douyin": 1000,
+    "high_engagement_views_bili": 5000,
+    "high_engagement_shares_wb": 100,
+    "high_engagement_comments": 50,
+    "negative_alert_ratio": 0.3,
+    "kol_min_followers": 10000,
+    "risk_priority_high_keywords": ["投诉", "举报", "欺骗", "骗局", "违规", "违法"]
+  }
+}
