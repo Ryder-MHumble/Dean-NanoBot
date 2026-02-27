@@ -590,6 +590,7 @@ cmd_help() {
     printf "   ${G}restart${NC}    Restart service\n"
     printf "   ${G}status${NC}     Show dashboard\n"
     printf "   ${G}logs${NC}       View logs ${D}(-f to follow)${NC}\n"
+    printf "   ${G}monitor${NC}    Real-time resource dashboard\n"
     printf "   ${G}help${NC}       This message\n"
 
     printf "\n ${BOLD}Options${NC}\n\n"
@@ -608,6 +609,14 @@ cmd_help() {
     printf "   ${D}\$${NC} ./deploy.sh logs -f       ${D}# follow logs${NC}\n"
     printf "   ${D}\$${NC} ./deploy.sh status         ${D}# view dashboard${NC}\n"
     printf "\n"
+}
+
+cmd_monitor() {
+    local script="$PROJECT_DIR/monitor.sh"
+    if [[ ! -x "$script" ]]; then
+        fail "monitor.sh not found or not executable"; return 1
+    fi
+    exec "$script" "$@"
 }
 
 # ── Parse Args ────────────────────────────────────────────────
@@ -631,6 +640,7 @@ case "$COMMAND" in
     restart)        cmd_restart ;;
     status)         cmd_status ;;
     logs)           cmd_logs ;;
+    monitor)        cmd_monitor ;;
     help|--help|-h) cmd_help ;;
     *)              fail "Unknown command: $COMMAND"; cmd_help; exit 1 ;;
 esac
