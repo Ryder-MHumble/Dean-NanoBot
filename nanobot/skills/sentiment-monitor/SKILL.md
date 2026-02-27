@@ -1,6 +1,6 @@
 ---
 name: sentiment-monitor
-description: Daily sentiment monitoring / 每日舆情监控. Crawls and analyzes social media (Xiaohongshu, Douyin, Bilibili, Weibo) about the research institute, generates professional sentiment reports with risk alerts, trending topics, and account monitoring. Use when (1) setting up daily monitoring (2) generating sentiment report (3) analyzing social media data (4) running sentiment monitoring
+description: Daily sentiment monitoring / 每日舆情监控. Analyzes social media data from Supabase (Xiaohongshu, Douyin, Bilibili, Weibo) about the research institute, generates professional sentiment reports with risk alerts, trending topics, and account monitoring. Use when (1) setting up daily monitoring (2) generating sentiment report (3) analyzing social media data (4) running sentiment monitoring
 metadata: {"nanobot":{"emoji":"📊","requires":{"bins":["python3"]}}}
 ---
 
@@ -10,7 +10,7 @@ Automated daily sentiment monitoring for research institute leadership.
 
 ## Overview
 
-This skill enables automated collection and analysis of social media content across multiple Chinese platforms (Xiaohongshu, Douyin, Bilibili, Weibo) using MediaCrawler, followed by AI-powered sentiment analysis and professional report generation.
+This skill enables automated analysis of social media content across multiple Chinese platforms (Xiaohongshu, Douyin, Bilibili, Weibo) using data stored in Supabase, followed by AI-powered sentiment analysis and professional report generation.
 
 **Key Features**:
 - Multi-platform data collection (4 major Chinese social platforms)
@@ -242,9 +242,8 @@ cron(
 The agent will receive the message "Run sentiment monitoring: analyze social media data and send daily report" and should:
 1. Read this SKILL.md file
 2. Follow the workflow above
-3. Execute MediaCrawler
-4. Run run_monitor.py
-5. Send report via message tool
+3. Run run_monitor.py
+4. Send report via message tool
 
 ### Common cron expressions:
 - Daily at 9 AM: `0 9 * * *`
