@@ -9,7 +9,21 @@ No local crawler execution needed.
 import json
 import os
 import sys
+from pathlib import Path
 from typing import Dict, List, Any
+
+# 加载 .env 文件（从项目根目录向上查找）
+try:
+    from dotenv import load_dotenv
+    _here = Path(__file__).resolve()
+    for _parent in [_here.parent, _here.parent.parent, _here.parent.parent.parent,
+                    _here.parent.parent.parent.parent]:
+        _env = _parent / ".env"
+        if _env.exists():
+            load_dotenv(_env)
+            break
+except ImportError:
+    pass  # dotenv 不可用时静默跳过，依赖已设置的环境变量
 
 from analyze_sentiment import analyze_all_data
 try:
@@ -21,10 +35,12 @@ except ImportError:
 
 
 def load_config() -> Dict[str, Any]:
-    """Load configuration from config.json."""
+    """Load configuration from config.json, expanding ${VAR} placeholders."""
     config_path = os.path.join(os.path.dirname(__file__), 'config.json')
     with open(config_path, 'r', encoding='utf-8') as f:
-        return json.load(f)
+        raw = f.read()
+    expanded = os.path.expandvars(raw)
+    return json.loads(expanded)
 
 
 def load_all_data(config: Dict) -> tuple[Dict[str, List[Dict]], Dict[str, List[Dict]]]:

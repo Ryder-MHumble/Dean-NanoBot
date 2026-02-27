@@ -20,6 +20,16 @@ PID_FILE="/tmp/nanobot.pid"
 LOG_DIR="$HOME/.nanobot/logs"
 LOG_FILE="$LOG_DIR/gateway.log"
 
+# 自动加载 .env 文件（从脚本所在目录查找）
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ENV_FILE="$SCRIPT_DIR/.env"
+if [ -f "$ENV_FILE" ]; then
+    set -o allexport
+    # shellcheck disable=SC1090
+    source "$ENV_FILE"
+    set +o allexport
+fi
+
 # 颜色
 RED='\033[0;31m'
 GREEN='\033[0;32m'
