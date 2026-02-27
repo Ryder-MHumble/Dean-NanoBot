@@ -18,6 +18,8 @@ This skill enables automated collection and analysis of social media content acr
 - Risk detection and alerts
 - Trending topic extraction
 - KOL (Key Opinion Leader) identification
+- **Competitor comparison analysis** (vs 深圳河套研究院, 上海创智研究院)
+- **Negative content traceability** (detailed source links and comments)
 - Professional reports for leadership decision-making
 
 ## When to Use
@@ -50,27 +52,19 @@ cd /Users/sunminghao/Desktop/nanobot/nanobot/skills/sentiment-monitor/scripts &&
 
 When executing sentiment monitoring, follow these steps:
 
-### 1. Data Collection
-Execute MediaCrawler to fetch latest social media data:
-```bash
-cd /Users/sunminghao/Desktop/MediaCrawler && python run.py --crawl-only >> /tmp/mediacrawler.log 2>&1
-```
-
-**Note**: This step takes 5-15 minutes. Monitor progress via `/tmp/mediacrawler.log`.
-
-### 2. Run Monitoring Script
-After crawling completes, run the main monitoring script:
+### 1. Run Monitoring Script
+Execute the monitoring script to load data from Supabase and generate report:
 ```bash
 cd /Users/sunminghao/Desktop/nanobot/nanobot/skills/sentiment-monitor/scripts && python3 run_monitor.py
 ```
 
 The script will:
-- Load data from all 4 platforms
+- Load all data from Supabase (posts and comments)
 - Perform sentiment analysis
 - Generate professional report
 - Output report to stdout
 
-### 3. Send Report
+### 2. Send Report
 Use the message tool to send the generated report to the user:
 ```python
 message(content=report_content, channel="dingtalk", chat_id=chat_id)
@@ -78,42 +72,35 @@ message(content=report_content, channel="dingtalk", chat_id=chat_id)
 
 ## Data Sources
 
-MediaCrawler collects data from:
+All data is loaded from Supabase database:
 
 - **Xiaohongshu (小红书)**: Notes, images, lifestyle content
-  - Data: `/Users/sunminghao/Desktop/MediaCrawler/data/xhs/json/search_contents_YYYY-MM-DD.json`
-
 - **Douyin (抖音)**: Short videos, viral content
-  - Data: `/Users/sunminghao/Desktop/MediaCrawler/data/douyin/json/search_contents_YYYY-MM-DD.json`
-
 - **Bilibili (B站)**: Long-form videos, technical content
-  - Data: `/Users/sunminghao/Desktop/MediaCrawler/data/bili/json/search_contents_YYYY-MM-DD.json`
-
 - **Weibo (微博)**: News, public discourse
-  - Data: `/Users/sunminghao/Desktop/MediaCrawler/data/weibo/json/search_contents_YYYY-MM-DD.json`
 
-**Search Keywords**: "中关村人工智能研究院", "北京中关村学院"
+**Search Keywords**: "中关村人工智能研究院", "北京中关村学院", "中关村两院"
+
+**Competitor Keywords**:
+- 中关村人工智能研究院
+- 深圳河套研究院
+- 上海创智研究院
 
 ## Scripts
 
 ### run_monitor.py
-Main orchestration script that coordinates the entire workflow.
+Main script that loads data from Supabase and generates report.
 
 **Usage**:
 ```bash
-python3 run_monitor.py [--date YYYY-MM-DD] [--skip-crawler]
+python3 run_monitor.py
 ```
 
-**Options**:
-- `--date`: Specify date (default: today)
-- `--skip-crawler`: Skip MediaCrawler execution (use existing data)
-
 **What it does**:
-1. Execute MediaCrawler (unless --skip-crawler)
-2. Load JSON data from all platforms
-3. Call analyze_sentiment.py for analysis
-4. Call generate_report.py to format report
-5. Output complete markdown report
+1. Load all posts and comments from Supabase
+2. Call analyze_sentiment.py for analysis
+3. Call generate_report_v2.py to format report
+4. Output complete markdown report
 
 ### analyze_sentiment.py
 Core sentiment analysis engine (imported by run_monitor.py).
@@ -148,19 +135,25 @@ The generated report includes these sections:
 - Key findings
 - Urgent action items
 
-### 2. Sentiment Overview
+### 2. Competitor Comparison Analysis
+- Side-by-side comparison with 深圳河套研究院 and 上海创智研究院
+- Sentiment distribution comparison
+- Engagement metrics comparison
+- Competitive insights and recommendations
+
+### 3. Sentiment Overview
 - Sentiment distribution table
 - Trend comparison (vs previous day)
 - Text-based charts
 
-### 3. Platform Analysis
+### 4. Platform Analysis
 For each platform (Xiaohongshu, Douyin, Bilibili, Weibo):
 - Total posts/videos
 - Average engagement
 - Top content (high engagement items)
 - Key topics
 
-### 4. Risk Alerts
+### 5. Risk Alerts
 Prioritized list of risks requiring attention:
 - **High Priority**: Issues needing immediate action
 - **Medium Priority**: Issues to monitor
@@ -171,19 +164,30 @@ Each alert includes:
 - Issue description
 - Recommended action
 
-### 5. Trending Topics
+### 6. Negative Content Details
+- **Complete list of all negative posts** about 中关村人工智能研究院
+- Full content preview with source links
+- All comments under each negative post
+- Easy traceability for response and handling
+
+### 7. Trending Topics
 - Top 5 topics by frequency and engagement
 - Associated hashtags
 - Content themes
 - Sentiment by topic
 
-### 6. Account Monitoring
+### 8. Comments Analysis
+- Overall comment sentiment distribution
+- High-risk comments detection
+- Comment management recommendations
+
+### 9. Account Monitoring
 - KOL identification (high-influence accounts)
 - Active creators
 - Account health metrics
 - No spam/bot detection
 
-### 7. Recommendations
+### 10. Recommendations
 - Immediate actions (this week)
 - Short-term strategy (this month)
 - Long-term initiatives (this quarter)
@@ -196,7 +200,17 @@ Edit `scripts/config.json` to customize:
 {
   "mediacrawler_path": "/Users/sunminghao/Desktop/MediaCrawler",
   "data_path": "/Users/sunminghao/Desktop/MediaCrawler/data",
-  "keywords": ["中关村人工智能研究院", "北京中关村学院"],
+  "keywords": ["中关村两院", "中关村人工智能研究院", "北京中关村学院"],
+  "competitor_keywords": {
+    "zgc": ["中关村人工智能研究院", "中关村两院", "北京中关村学院"],
+    "hetao": ["深圳河套研究院", "河套研究院"],
+    "chuangzhi": ["上海创智研究院", "创智研究院"]
+  },
+  "competitor_names": {
+    "zgc": "中关村人工智能研究院",
+    "hetao": "深圳河套研究院",
+    "chuangzhi": "上海创智研究院"
+  },
   "platforms": ["xhs", "douyin", "bili", "wb"],
   "sentiment_keywords": {
     "positive": ["优秀", "很好", "专业", "领先", "创新"],
@@ -241,15 +255,13 @@ The agent will receive the message "Run sentiment monitoring: analyze social med
 
 **Common issues**:
 
-1. **MediaCrawler fails**:
-   - Check `/tmp/mediacrawler.log` for errors
-   - Verify login state (first-time setup requires manual login)
+1. **Supabase connection fails**:
    - Check network connectivity
+   - Verify Supabase credentials in config.json
 
-2. **Data files not found**:
-   - Crawler may have failed silently
-   - No results for keywords (empty data)
-   - Use `--skip-crawler` to test with existing data
+2. **No data found**:
+   - Verify data exists in Supabase tables
+   - Check if keywords match any content
 
 3. **Empty results**:
    - Report will show "No mentions found"
@@ -257,15 +269,13 @@ The agent will receive the message "Run sentiment monitoring: analyze social med
 
 ## Examples
 
-### Example 1: Manual daily report
+### Example 1: Manual report generation
 User: "生成今天的舆情报告"
 
 Agent:
-1. Execute: `cd /Users/sunminghao/Desktop/MediaCrawler && python run.py --crawl-only`
-2. Wait for completion (monitor log)
-3. Execute: `cd /Users/sunminghao/Desktop/nanobot/nanobot/skills/sentiment-monitor/scripts && python3 run_monitor.py`
-4. Capture output (markdown report)
-5. Send via message tool
+1. Execute: `cd /Users/sunminghao/Desktop/nanobot/nanobot/skills/sentiment-monitor/scripts && python3 run_monitor.py`
+2. Capture output (markdown report)
+3. Send via message tool
 
 ### Example 2: Set up automated monitoring
 User: "设置每天早上9点的舆情监控定时任务"
@@ -276,11 +286,11 @@ Agent:
 3. Set message="Run sentiment monitoring: analyze social media data and send daily report"
 4. Confirm job created
 
-### Example 3: Analyze specific date
-User: "分析2月12日的舆情数据"
+### Example 3: Generate report
+User: "分析最近的舆情数据"
 
 Agent:
-1. Execute: `cd /Users/sunminghao/Desktop/nanobot/nanobot/skills/sentiment-monitor/scripts && python3 run_monitor.py --date 2026-02-12 --skip-crawler`
+1. Execute: `cd /Users/sunminghao/Desktop/nanobot/nanobot/skills/sentiment-monitor/scripts && python3 run_monitor.py`
 2. Capture report
 3. Send via message tool
 

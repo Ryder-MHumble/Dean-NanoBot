@@ -1,17 +1,32 @@
 {
+  "data_source": "supabase",
+  "supabase": {
+    "url": "https://dfpijqpgsupvdmidztup.supabase.co",
+    "key": "${SUPABASE_KEY}"
+  },
   "mediacrawler_path": "/Users/sunminghao/Desktop/MediaCrawler",
   "data_path": "/Users/sunminghao/Desktop/MediaCrawler/data",
   "keywords": ["中关村两院", "中关村人工智能研究院", "北京中关村学院"],
-  "platforms": ["xhs", "douyin", "bili", "wb"],
+  "competitor_keywords": {
+    "zgc": ["中关村人工智能研究院", "中关村两院", "北京中关村学院"],
+    "hetao": ["深圳河套研究院", "河套研究院"],
+    "chuangzhi": ["上海创智研究院", "创智研究院"]
+  },
+  "competitor_names": {
+    "zgc": "中关村人工智能研究院",
+    "hetao": "深圳河套研究院",
+    "chuangzhi": "上海创智研究院"
+  },
+  "platforms": ["xhs", "dy", "bili", "wb"],
   "platform_names": {
     "xhs": "Xiaohongshu",
-    "douyin": "Douyin",
+    "dy": "Douyin",
     "bili": "Bilibili",
     "wb": "Weibo"
   },
   "platform_names_cn": {
     "xhs": "小红书",
-    "douyin": "抖音",
+    "dy": "抖音",
     "bili": "B站",
     "wb": "微博"
   },
@@ -22,15 +37,22 @@
       "完美", "精彩", "出色", "卓越", "一流", "高水平", "有实力"
     ],
     "negative": [
-      "问题", "担心", "失望", "不满", "投诉", "质疑", "差", "坑", "骗",
-      "糟糕", "垃圾", "失败", "烂", "后悔", "不推荐", "慎重", "小心",
-      "骗人", "忽悠", "不靠谱", "不行", "不好", "太差"
+      "失望", "不满", "投诉", "质疑",
+      "被坑", "踩坑", "被骗", "骗局",
+      "糟糕", "垃圾", "失败", "后悔", "不推荐",
+      "骗人", "忽悠", "不靠谱", "不行", "不好", "太差",
+      "效果差", "体验差", "态度差", "真的差",
+      "有问题", "出问题", "欺骗", "担心"
     ]
   },
+  "positive_override_keywords": [
+    "以正视听", "去伪存真", "澄清", "辟谣", "答疑", "实事求是",
+    "正面回应", "亲身经历", "真实情况", "说清楚", "告诉大家", "分享一下"
+  ],
   "risk_keywords": [
     "投诉", "举报", "欺骗", "骗局", "虚假", "误导", "不实", "造假",
     "违规", "违法", "侵权", "纠纷", "诉讼", "赔偿", "退款",
-    "危险", "风险", "威胁", "伤害", "事故"
+    "危险", "威胁", "伤害", "事故"
   ],
   "thresholds": {
     "high_engagement_likes_xhs": 500,

@@ -11,7 +11,15 @@ import json
 import os
 from typing import Dict, List, Any, Tuple
 from collections import Counter
-from datetime import datetime
+from datetime import datetime, date
+
+# Import Supabase client
+try:
+    from supabase_client import SentimentSupabaseClient
+    SUPABASE_AVAILABLE = True
+except ImportError:
+    SUPABASE_AVAILABLE = False
+    print("⚠️  Supabase client not available, will use local data only")
 
 
 def load_config() -> Dict[str, Any]:
@@ -60,10 +68,10 @@ def normalize_platform_data(raw_data: List[Dict], platform: str) -> List[Dict]:
                     "raw": item
                 }
 
-            elif platform == "douyin":
+            elif platform == "dy" or platform == "douyin":
                 normalized_item = {
                     "id": item.get("aweme_id", ""),
-                    "platform": "douyin",
+                    "platform": "dy",
                     "type": "video" if item.get("aweme_type") == "0" else "image",
                     "title": item.get("title", ""),
                     "content": f"{item.get('title', '')} {item.get('desc', '')}".strip(),
@@ -150,39 +158,38 @@ def normalize_platform_data(raw_data: List[Dict], platform: str) -> List[Dict]:
 
 def classify_sentiment(text: str, config: Dict) -> Tuple[str, float, float]:
     """
-    Classify sentiment using keyword matching.
-
-    Args:
-        text: Content text to analyze
-        config: Configuration dict with sentiment keywords
+    Classify sentiment using keyword matching with context awareness.
 
     Returns:
         Tuple of (label, score, confidence)
-        - label: "positive", "neutral", or "negative"
-        - score: -1 to 1 (negative to positive)
-        - confidence: 0 to 1
     """
     positive_keywords = config["sentiment_keywords"]["positive"]
     negative_keywords = config["sentiment_keywords"]["negative"]
+    override_keywords = config.get("positive_override_keywords", [])
 
-    # Count keyword matches
+    # If text contains positive-context override keywords (e.g. clarification, debunking),
+    # negative keyword matches are describing OTHERS' content, not the institution itself.
+    has_positive_override = any(kw in text for kw in override_keywords)
+
     positive_count = sum(1 for kw in positive_keywords if kw in text)
     negative_count = sum(1 for kw in negative_keywords if kw in text)
 
+    # Suppress false-negative: override context neutralizes negative keyword hits
+    if has_positive_override and negative_count > 0:
+        negative_count = 0
+
     total_count = positive_count + negative_count
 
-    # Determine sentiment
     if total_count == 0:
         return "neutral", 0.0, 0.3
 
-    # Calculate score
     if positive_count > negative_count:
         label = "positive"
-        score = min(1.0, positive_count / (positive_count + negative_count))
-        confidence = min(1.0, total_count / 5.0)  # More keywords = higher confidence
+        score = min(1.0, positive_count / total_count)
+        confidence = min(1.0, total_count / 5.0)
     elif negative_count > positive_count:
         label = "negative"
-        score = -min(1.0, negative_count / (positive_count + negative_count))
+        score = -min(1.0, negative_count / total_count)
         confidence = min(1.0, total_count / 5.0)
     else:
         label = "neutral"
@@ -206,9 +213,10 @@ def detect_risks(items: List[Dict], config: Dict) -> List[Dict]:
     risks = []
     risk_keywords = config["risk_keywords"]
     high_priority_keywords = config["thresholds"]["risk_priority_high_keywords"]
+    override_keywords = config.get("positive_override_keywords", [])
 
     for item in items:
-        # Only flag negative or highly neutral items
+        # Only flag negative or neutral items
         if item["sentiment"]["label"] not in ["negative", "neutral"]:
             continue
 
@@ -216,6 +224,11 @@ def detect_risks(items: List[Dict], config: Dict) -> List[Dict]:
         matched_keywords = [kw for kw in risk_keywords if kw in content]
 
         if not matched_keywords:
+            continue
+
+        # Skip if risk keyword appears in a positive/clarification context
+        has_positive_override = any(kw in content for kw in override_keywords)
+        if has_positive_override:
             continue
 
         # Determine severity
@@ -430,17 +443,91 @@ def analyze_platform_data(platform_items: List[Dict], config: Dict) -> Dict[str,
     }
 
 
-def analyze_all_data(all_data: Dict[str, List[Dict]]) -> Dict[str, Any]:
+def load_data_from_supabase(config: Dict, target_date: str) -> Dict[str, List[Dict]]:
+    """
+    从Supabase加载数据
+
+    Args:
+        config: 配置字典
+        target_date: 目标日期 (YYYY-MM-DD)
+
+    Returns:
+        Dict mapping platform to raw data lists
+    """
+    if not SUPABASE_AVAILABLE:
+        raise ImportError("Supabase client not available")
+
+    # 创建Supabase客户端
+    supabase_client = SentimentSupabaseClient(config)
+
+    # 解析日期
+    if isinstance(target_date, str):
+        target_date_obj = datetime.strptime(target_date, "%Y-%m-%d").date()
+    else:
+        target_date_obj = target_date
+
+    print(f"\n📊 Loading data from Supabase for {target_date_obj}...")
+
+    all_data = {}
+    platforms = config.get("platforms", ["xhs", "douyin", "bili", "wb"])
+
+    for platform in platforms:
+        # 从Supabase读取数据
+        items = supabase_client.get_contents_by_date(target_date_obj, platform)
+
+        # 转换为旧格式（向后兼容）
+        converted_items = supabase_client.convert_to_legacy_format(items, platform)
+
+        all_data[platform] = converted_items
+        print(f"   {platform}: {len(converted_items)} items")
+
+    return all_data
+
+
+def classify_competitor(text: str, config: Dict) -> str:
+    """判断内容属于哪个机构"""
+    competitor_keywords = config.get("competitor_keywords", {})
+    for org, keywords in competitor_keywords.items():
+        if any(kw in text for kw in keywords):
+            return org
+    return "unknown"
+
+
+def analyze_all_data(
+    all_data: Dict[str, List[Dict]] = None,
+    config: Dict = None,
+    target_date: str = None,
+    comments_data: Dict[str, List[Dict]] = None
+) -> Dict[str, Any]:
     """
     Perform complete sentiment analysis on all platform data.
 
     Args:
-        all_data: Dict mapping platform to raw data lists
+        all_data: Dict mapping platform to raw data lists (optional, for backward compatibility)
+        config: Configuration dict (required if loading from Supabase)
+        target_date: Target date string YYYY-MM-DD (required if loading from Supabase)
+        comments_data: Dict mapping content_id to list of comment dicts
 
     Returns:
         Complete analysis results
     """
-    config = load_config()
+    if config is None:
+        config = load_config()
+
+    # 如果没有提供all_data，从Supabase加载
+    if all_data is None:
+        data_source = config.get("data_source", "local")
+
+        if data_source == "supabase":
+            if not target_date:
+                raise ValueError("target_date is required when using Supabase data source")
+            all_data = load_data_from_supabase(config, target_date)
+        else:
+            raise ValueError("all_data must be provided when data_source is not 'supabase'")
+
+    # 如果没有提供comments_data，初始化为空
+    if comments_data is None:
+        comments_data = {}
 
     # Normalize all data
     all_items = []
@@ -448,7 +535,7 @@ def analyze_all_data(all_data: Dict[str, List[Dict]]) -> Dict[str, Any]:
         normalized = normalize_platform_data(raw_items, platform)
         all_items.extend(normalized)
 
-    # Classify sentiment for all items
+    # Classify sentiment and competitor for all items
     for item in all_items:
         label, score, confidence = classify_sentiment(item["content"], config)
         item["sentiment"] = {
@@ -456,6 +543,53 @@ def analyze_all_data(all_data: Dict[str, List[Dict]]) -> Dict[str, Any]:
             "score": score,
             "confidence": confidence
         }
+        item["competitor"] = classify_competitor(item["content"], config)
+
+    # ==================== 关联和分析评论数据 ====================
+    comments_analysis = {
+        "total_comments": 0,
+        "comments_sentiment": {"positive": 0, "neutral": 0, "negative": 0},
+        "high_risk_comments": []
+    }
+    
+    if comments_data:
+        print(f"   Processing {sum(len(v) for v in comments_data.values())} comments...")
+        for item in all_items:
+            # 为每个item关联评论
+            item_id = item.get("id", "")
+            item_comments = comments_data.get(item_id, [])
+            
+            if item_comments:
+                item["comments"] = item_comments
+                item["comment_sentiment_dist"] = {"positive": 0, "neutral": 0, "negative": 0}
+                
+                # 分析每条评论的情感
+                for comment in item_comments:
+                    comment_text = comment.get("content", "")
+                    if comment_text:
+                        label, score, confidence = classify_sentiment(comment_text, config)
+                        comment["sentiment"] = {"label": label, "score": score}
+                        
+                        # 更新统计
+                        item["comment_sentiment_dist"][label] = item["comment_sentiment_dist"].get(label, 0) + 1
+                        comments_analysis["comments_sentiment"][label] += 1
+                        comments_analysis["total_comments"] += 1
+                        
+                        # 检测高风险评论
+                        if label == "negative":
+                            risk_keywords = config.get("risk_keywords", [])
+                            matched_keywords = [kw for kw in risk_keywords if kw in comment_text]
+                            if matched_keywords:
+                                comments_analysis["high_risk_comments"].append({
+                                    "content": comment_text,
+                                    "keywords": matched_keywords,
+                                    "parent_content_id": item_id,
+                                    "author": comment.get("nickname", "Unknown"),
+                                    "engagement": comment.get("like_count", 0)
+                                })
+            else:
+                item["comments"] = []
+                item["comment_sentiment_dist"] = {"positive": 0, "neutral": 0, "negative": 0}
 
     # Perform analysis
     metrics = aggregate_metrics(all_items)
@@ -469,18 +603,53 @@ def analyze_all_data(all_data: Dict[str, List[Dict]]) -> Dict[str, Any]:
         platform_items = [item for item in all_items if item["platform"] == platform]
         platform_analysis[platform] = analyze_platform_data(platform_items, config)
 
+    # 计算数据日期范围
+    data_date_label = "全量数据"
+    if all_items:
+        timestamps = [
+            item["created_at"] for item in all_items
+            if item.get("created_at") and item["created_at"] > 0
+        ]
+        if timestamps:
+            ts_min = min(t if t < 10000000000 else t / 1000 for t in timestamps)
+            ts_max = max(t if t < 10000000000 else t / 1000 for t in timestamps)
+            try:
+                date_min = datetime.fromtimestamp(ts_min).strftime("%Y-%m-%d")
+                date_max = datetime.fromtimestamp(ts_max).strftime("%Y-%m-%d")
+                data_date_label = f"{date_min} ~ {date_max}" if date_min != date_max else date_min
+            except Exception:
+                pass
+
+    # 竞品对比分析
+    competitor_analysis = {}
+    competitor_keywords = config.get("competitor_keywords", {})
+    for org in competitor_keywords.keys():
+        org_items = [item for item in all_items if item.get("competitor") == org]
+        if org_items:
+            org_sentiment = Counter(item["sentiment"]["label"] for item in org_items)
+            org_total = len(org_items)
+            competitor_analysis[org] = {
+                "total": org_total,
+                "sentiment_dist": dict(org_sentiment),
+                "sentiment_pct": {k: round(v/org_total*100, 1) for k, v in org_sentiment.items()},
+                "avg_engagement": round(sum(sum(item["engagement"].values()) for item in org_items) / org_total, 1) if org_total > 0 else 0,
+                "items": org_items
+            }
+
     return {
         "metadata": {
             "analysis_date": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             "total_platforms": len(all_data),
-            "data_date": datetime.now().strftime("%Y-%m-%d")
+            "data_date": data_date_label
         },
         "metrics": metrics,
         "risks": risks,
         "topics": topics[:10],
         "kols": kols,
         "platform_analysis": platform_analysis,
-        "all_items": all_items
+        "all_items": all_items,
+        "comments_analysis": comments_analysis,
+        "competitor_analysis": competitor_analysis
     }
 
 

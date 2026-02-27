@@ -25,7 +25,7 @@ from nanobot.session.manager import SessionManager
 class AgentLoop:
     """
     The agent loop is the core processing engine.
-    
+
     It:
     1. Receives messages from the bus
     2. Builds context with history, memory, skills
@@ -33,7 +33,7 @@ class AgentLoop:
     4. Executes tool calls
     5. Sends responses back
     """
-    
+
     def __init__(
         self,
         bus: MessageBus,
@@ -46,6 +46,7 @@ class AgentLoop:
         cron_service: "CronService | None" = None,
         restrict_to_workspace: bool = False,
         session_manager: SessionManager | None = None,
+        mcp_configs: list | None = None,
     ):
         from nanobot.config.schema import ExecToolConfig
         from nanobot.cron.service import CronService
@@ -58,6 +59,8 @@ class AgentLoop:
         self.exec_config = exec_config or ExecToolConfig()
         self.cron_service = cron_service
         self.restrict_to_workspace = restrict_to_workspace
+        self._mcp_configs = mcp_configs or []
+        self._mcp_clients: list = []
         
         self.context = ContextBuilder(workspace)
         self.sessions = session_manager or SessionManager(workspace)
@@ -110,35 +113,60 @@ class AgentLoop:
         # Screenshot tool
         from nanobot.agent.tools.screenshot import ScreenshotTool
         self.tools.register(ScreenshotTool(workspace=self.workspace))
+
+    async def _start_mcp_tools(self) -> None:
+        """Start all configured MCP servers and register their tools."""
+        from nanobot.agent.tools.mcp_client import MCPClient, MCPToolWrapper
+
+        for cfg in self._mcp_configs:
+            client = MCPClient(cfg)
+            try:
+                await client.start()
+                tools = await client.list_tools()
+                for t in tools:
+                    self.tools.register(MCPToolWrapper(t, client))
+                self._mcp_clients.append(client)
+                logger.info(f"MCP: registered {len(tools)} tools from '{cfg.command} {' '.join(cfg.args)}'")
+            except Exception as e:
+                logger.warning(f"MCP: failed to start '{cfg.command}': {e}")
     
     async def run(self) -> None:
         """Run the agent loop, processing messages from the bus."""
         self._running = True
         logger.info("Agent loop started")
-        
-        while self._running:
-            try:
-                # Wait for next message
-                msg = await asyncio.wait_for(
-                    self.bus.consume_inbound(),
-                    timeout=1.0
-                )
-                
-                # Process it
+
+        await self._start_mcp_tools()
+
+        try:
+            while self._running:
                 try:
-                    response = await self._process_message(msg)
-                    if response:
-                        await self.bus.publish_outbound(response)
-                except Exception as e:
-                    logger.error(f"Error processing message: {e}")
-                    # Send error response
-                    await self.bus.publish_outbound(OutboundMessage(
-                        channel=msg.channel,
-                        chat_id=msg.chat_id,
-                        content=f"Sorry, I encountered an error: {str(e)}"
-                    ))
-            except asyncio.TimeoutError:
-                continue
+                    # Wait for next message
+                    msg = await asyncio.wait_for(
+                        self.bus.consume_inbound(),
+                        timeout=1.0
+                    )
+
+                    # Process it
+                    try:
+                        response = await self._process_message(msg)
+                        if response:
+                            await self.bus.publish_outbound(response)
+                    except Exception as e:
+                        logger.error(f"Error processing message: {e}")
+                        # Send error response
+                        await self.bus.publish_outbound(OutboundMessage(
+                            channel=msg.channel,
+                            chat_id=msg.chat_id,
+                            content=f"Sorry, I encountered an error: {str(e)}"
+                        ))
+                except asyncio.TimeoutError:
+                    continue
+        finally:
+            for client in self._mcp_clients:
+                try:
+                    await client.stop()
+                except Exception:
+                    pass
     
     def stop(self) -> None:
         """Stop the agent loop."""

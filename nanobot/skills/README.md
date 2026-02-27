@@ -5,6 +5,7 @@ This directory contains built-in skills that extend nanobot's capabilities.
 ## Skill Format
 
 Each skill is a directory containing a `SKILL.md` file with:
+
 - YAML frontmatter (name, description, metadata)
 - Markdown instructions for the agent
 
@@ -22,3 +23,5 @@ The skill format and metadata structure follow OpenClaw's conventions to maintai
 | `summarize` | Summarize URLs, files, and YouTube videos |
 | `tmux` | Remote-control tmux sessions |
 | `skill-creator` | Create new skills |
+| `sentiment-monitor` | Daily social media sentiment monitoring and report |
+| `dean-briefing` | Daily AI intelligence briefing for institute leadership (9AM push) |
