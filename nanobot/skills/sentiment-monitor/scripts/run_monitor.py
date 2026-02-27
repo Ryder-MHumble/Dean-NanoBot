@@ -17,7 +17,7 @@ try:
     from dotenv import load_dotenv
     _here = Path(__file__).resolve()
     for _parent in [_here.parent, _here.parent.parent, _here.parent.parent.parent,
-                    _here.parent.parent.parent.parent]:
+                    _here.parent.parent.parent.parent, _here.parent.parent.parent.parent.parent]:
         _env = _parent / ".env"
         if _env.exists():
             load_dotenv(_env)
