@@ -33,7 +33,7 @@ Use this skill when the user asks:
 ### 1. Run the script
 
 ```bash
-cd /Users/sunminghao/Desktop/nanobot/nanobot/skills/dean-briefing/scripts && .venv/bin/python3 generate_briefing.py
+cd /Users/sunminghao/Desktop/nanobot/nanobot/skills/dean-briefing/scripts && python3 generate_briefing.py
 ```
 
 The script fetches the API, renders all paragraphs with embedded links, and outputs the final DingTalk Markdown report to stdout.
@@ -82,7 +82,7 @@ The agent will receive the message and should:
 User: "帮我生成今天的院长早报"
 
 Agent:
-1. `cd .../dean-briefing/scripts && .venv/bin/python3 generate_briefing.py`
+1. `cd .../dean-briefing/scripts && python3 generate_briefing.py`
 2. Extract report from stdout
 3. Send via message tool
 
