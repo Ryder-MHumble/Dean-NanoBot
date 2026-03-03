@@ -195,11 +195,22 @@ class LiteLLMProvider(LLMProvider):
     )
 
     def _estimate_cost(self, model: str, prompt_tokens: int, completion_tokens: int) -> float:
-        """Estimate cost from the fallback price table when LiteLLM returns 0."""
+        """Estimate cost from the fallback price table when LiteLLM returns 0.
+
+        Strips gateway prefixes (e.g. "openrouter/anthropic/") before matching so that
+        compound model names like "openrouter/anthropic/claude-haiku-4.5" still hit the table.
+        """
         model_lower = model.lower()
-        for keyword, in_price, out_price in self._PRICE_TABLE:
-            if keyword in model_lower:
-                return (prompt_tokens * in_price + completion_tokens * out_price) / 1_000_000
+        # Try progressively shorter suffix slices: full → strip first segment → etc.
+        candidates = [model_lower]
+        parts = model_lower.split("/")
+        for i in range(1, len(parts)):
+            candidates.append("/".join(parts[i:]))
+
+        for candidate in candidates:
+            for keyword, in_price, out_price in self._PRICE_TABLE:
+                if keyword in candidate:
+                    return (prompt_tokens * in_price + completion_tokens * out_price) / 1_000_000
         return 0.0
 
     def _record_usage(self, response: Any, model: str) -> None:

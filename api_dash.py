@@ -15,6 +15,70 @@ from pathlib import Path
 
 USAGE_FILE = Path.home() / ".nanobot" / "usage.jsonl"
 
+# ── Fallback price table (USD / 1M tokens) ────────────────────
+# Mirrors litellm_provider._PRICE_TABLE — first keyword match wins.
+# Handles provider-prefixed model names like "openrouter/anthropic/claude-haiku-4.5".
+_PRICE_TABLE: tuple[tuple[str, float, float], ...] = (
+    # Claude 4 series
+    ("claude-opus-4",          5.00,  25.00),
+    ("claude-sonnet-4",        3.00,  15.00),
+    ("claude-haiku-4",         1.00,   5.00),
+    # Claude 3.x series
+    ("claude-3.7-sonnet",      3.00,  15.00),
+    ("claude-3.5-sonnet",      6.00,  30.00),
+    ("claude-3.5-haiku",       0.80,   4.00),
+    ("claude-3-opus",         15.00,  75.00),
+    ("claude-3-haiku",         0.25,   1.25),
+    # OpenAI
+    ("gpt-4o-mini",            0.15,   0.60),
+    ("gpt-4o",                 2.50,  10.00),
+    # DeepSeek
+    ("deepseek-r1",            0.55,   2.19),
+    ("deepseek-v3",            0.27,   1.10),
+    ("deepseek-chat",          0.27,   1.10),
+    # Google
+    ("gemini-2.5-pro",         1.25,  10.00),
+    ("gemini-2.0-flash",       0.10,   0.40),
+    ("gemini-1.5-pro",         1.25,   5.00),
+    # Other
+    ("qwen-max",               1.60,   6.40),
+    ("qwen-plus",              0.40,   1.20),
+    ("glm-4",                  0.14,   0.14),
+    ("kimi-k2",                0.60,   2.50),
+)
+
+
+def _estimate_cost(model: str, prompt_tokens: int, completion_tokens: int) -> float:
+    """Estimate cost from the price table. Strips gateway prefixes before matching."""
+    # Normalize: strip provider gateways like "openrouter/anthropic/" → last segment
+    # We try the full string first, then progressively strip leading segments.
+    model_lower = model.lower()
+    candidates = [model_lower]
+    parts = model_lower.split("/")
+    for i in range(1, len(parts)):
+        candidates.append("/".join(parts[i:]))
+
+    for candidate in candidates:
+        for keyword, in_price, out_price in _PRICE_TABLE:
+            if keyword in candidate:
+                return (prompt_tokens * in_price + completion_tokens * out_price) / 1_000_000
+    return 0.0
+
+
+def _match_price_label(model: str) -> str:
+    """Return a human-readable price label for the model, or 'NO MATCH'."""
+    model_lower = model.lower()
+    candidates = [model_lower]
+    parts = model_lower.split("/")
+    for i in range(1, len(parts)):
+        candidates.append("/".join(parts[i:]))
+    for candidate in candidates:
+        for keyword, in_price, out_price in _PRICE_TABLE:
+            if keyword in candidate:
+                return f"${in_price:.2f}/${out_price:.2f} per 1M"
+    return "NO MATCH"
+
+
 # ── ANSI palette (matches deploy.sh / monitor.sh) ─────────────
 R    = '\033[0;31m'
 G    = '\033[0;32m'
@@ -44,7 +108,17 @@ def load_records() -> list[dict]:
             if not line:
                 continue
             try:
-                records.append(json.loads(line))
+                r = json.loads(line)
+                # Back-fill cost when it was stored as 0 but tokens are present
+                if r.get("cost", 0.0) == 0.0 and r.get("total", 0) > 0:
+                    estimated = _estimate_cost(
+                        r.get("model", ""),
+                        r.get("in", 0),
+                        r.get("out", 0),
+                    )
+                    if estimated > 0:
+                        r = dict(r, cost=estimated, _estimated=True)
+                records.append(r)
             except json.JSONDecodeError:
                 pass
     return records
@@ -350,6 +424,26 @@ def render(interval: int) -> None:
             cost   = fmt_cost(r.get("cost", 0.0))
             print(f"  {D}{ts_str:<9}{NC}{BW}{sender:<16}{NC}{model:<22}"
                   f"{C}{in_t:>7}{NC}{G}{out_t:>7}{NC}{Y}{cost:>9}{NC}")
+
+    # ── Models summary ────────────────────────────────────────
+    print(f"\n  {P3}{'═' * W}{NC}")
+    print(f"  {BOLD}MODELS  {D}(cost pricing match){NC}")
+    hr()
+
+    model_calls: dict[str, int] = {}
+    for r in records:
+        m = r.get("model", "unknown")
+        model_calls[m] = model_calls.get(m, 0) + 1
+
+    if not model_calls:
+        print(f"  {D}No model data.{NC}")
+    else:
+        print(f"  {D}{'MODEL':<40}{'CALLS':>6}{'PRICE RATE':>22}{NC}")
+        hr("·")
+        for m, cnt in sorted(model_calls.items(), key=lambda x: -x[1]):
+            label = _match_price_label(m)
+            color = Y if label != "NO MATCH" else R
+            print(f"  {BW}{short_model(m):<40}{NC}{D}{cnt:>6}{NC}  {color}{label}{NC}")
 
     print(f"  {P3}{'═' * W}{NC}")
 
