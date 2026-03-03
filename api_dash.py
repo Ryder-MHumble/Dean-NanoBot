@@ -117,6 +117,71 @@ def compute_user_stats(records: list[dict], since: datetime | None = None) -> li
     return sorted(buckets.values(), key=lambda x: x["total"], reverse=True)
 
 
+def compute_daily_stats(records: list[dict], days: int = 7) -> list[tuple[str, dict]]:
+    """Return per-day stats for the last N days (newest first)."""
+    now = datetime.now(timezone.utc)
+    # Build a bucket per calendar date (local date derived from UTC ts)
+    buckets: dict[str, dict] = {}
+    cutoff = now - timedelta(days=days)
+    for r in records:
+        try:
+            ts = datetime.fromisoformat(r["ts"])
+            if ts.tzinfo is None:
+                ts = ts.replace(tzinfo=timezone.utc)
+            if ts < cutoff:
+                continue
+        except (KeyError, ValueError):
+            continue
+        day_key = ts.strftime("%Y-%m-%d")
+        if day_key not in buckets:
+            buckets[day_key] = {"calls": 0, "in": 0, "out": 0, "total": 0, "cost": 0.0}
+        b = buckets[day_key]
+        b["calls"] += 1
+        b["in"]    += r.get("in", 0)
+        b["out"]   += r.get("out", 0)
+        b["total"] += r.get("total", 0)
+        b["cost"]  += r.get("cost", 0.0)
+    return sorted(buckets.items(), reverse=True)  # newest first
+
+
+def compute_user_daily_stats(records: list[dict], days: int = 7) -> list[tuple[str, list[dict]]]:
+    """Return per-day, per-user stats for the last N days (newest first)."""
+    now = datetime.now(timezone.utc)
+    cutoff = now - timedelta(days=days)
+    # day_key → {(sender, channel) → stats}
+    day_users: dict[str, dict[tuple[str, str], dict]] = {}
+    for r in records:
+        try:
+            ts = datetime.fromisoformat(r["ts"])
+            if ts.tzinfo is None:
+                ts = ts.replace(tzinfo=timezone.utc)
+            if ts < cutoff:
+                continue
+        except (KeyError, ValueError):
+            continue
+        day_key = ts.strftime("%Y-%m-%d")
+        key = (r.get("sender", "unknown"), r.get("channel", "unknown"))
+        if day_key not in day_users:
+            day_users[day_key] = {}
+        if key not in day_users[day_key]:
+            day_users[day_key][key] = {
+                "sender": key[0], "channel": key[1],
+                "calls": 0, "in": 0, "out": 0, "total": 0, "cost": 0.0,
+            }
+        b = day_users[day_key][key]
+        b["calls"] += 1
+        b["in"]    += r.get("in", 0)
+        b["out"]   += r.get("out", 0)
+        b["total"] += r.get("total", 0)
+        b["cost"]  += r.get("cost", 0.0)
+    # Sort days newest first; within each day sort users by total desc
+    result = []
+    for day_key in sorted(day_users.keys(), reverse=True):
+        users = sorted(day_users[day_key].values(), key=lambda x: x["total"], reverse=True)
+        result.append((day_key, users))
+    return result
+
+
 # ── Render ────────────────────────────────────────────────────
 
 W = 70  # display width
@@ -131,12 +196,16 @@ def render(interval: int) -> None:
     today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
     week_start  = now - timedelta(days=7)
 
-    records    = load_records()
-    today      = compute_stats(records, since=today_start)
-    week       = compute_stats(records, since=week_start)
-    alltime    = compute_stats(records)
-    user_stats = compute_user_stats(records)          # all-time, per user
-    recent     = sorted(records, key=lambda r: r.get("ts", ""), reverse=True)[:10]
+    records          = load_records()
+    today            = compute_stats(records, since=today_start)
+    week             = compute_stats(records, since=week_start)
+    alltime          = compute_stats(records)
+    user_stats_all   = compute_user_stats(records)               # all-time
+    user_stats_today = compute_user_stats(records, since=today_start)
+    user_stats_week  = compute_user_stats(records, since=week_start)
+    daily_stats      = compute_daily_stats(records, days=7)
+    user_daily       = compute_user_daily_stats(records, days=7)
+    recent           = sorted(records, key=lambda r: r.get("ts", ""), reverse=True)[:10]
 
     # ── Banner ────────────────────────────────────────────────
     print()
@@ -170,28 +239,97 @@ def render(interval: int) -> None:
 
     # ── Per-user breakdown ────────────────────────────────────
     print(f"\n  {P3}{'═' * W}{NC}")
-    print(f"  {BOLD}USAGE BY USER  {D}(all time, sorted by tokens){NC}")
+    print(f"  {BOLD}USAGE BY USER{NC}")
     hr()
 
-    if not user_stats:
+    # Build a merged view: all unique (sender, channel) keys with today/7d/all stats
+    all_keys: dict[tuple[str, str], dict] = {}
+    for u in user_stats_all:
+        k = (u["sender"], u["channel"])
+        all_keys[k] = {"sender": u["sender"], "channel": u["channel"],
+                       "today": {"calls": 0, "in": 0, "out": 0, "total": 0, "cost": 0.0},
+                       "week":  {"calls": 0, "in": 0, "out": 0, "total": 0, "cost": 0.0},
+                       "all":   u}
+    for u in user_stats_today:
+        k = (u["sender"], u["channel"])
+        if k in all_keys:
+            all_keys[k]["today"] = u
+    for u in user_stats_week:
+        k = (u["sender"], u["channel"])
+        if k in all_keys:
+            all_keys[k]["week"] = u
+
+    merged = sorted(all_keys.values(), key=lambda x: x["all"]["total"], reverse=True)
+
+    if not merged:
         print(f"  {D}No data yet — sender field available after next deploy.{NC}")
     else:
-        print(f"  {D}{'SENDER':<22}{'CH':<10}{'CALLS':>6}{'INPUT':>9}{'OUTPUT':>9}{'TOTAL':>9}{'COST':>10}{NC}")
+        HDR_W = 20
+        COL_W = 16
+        # Header
+        print(f"  {D}{'SENDER / CHANNEL':<{HDR_W}}"
+              f"{'TODAY':>{COL_W}}{'LAST 7 DAYS':>{COL_W}}{'ALL TIME':>{COL_W}}{NC}")
         hr("·")
-        for u in user_stats[:12]:  # cap at 12 rows
-            sender  = str(u["sender"])[:20]
-            channel = str(u["channel"])[:8]
-            calls   = str(u["calls"])
-            in_t    = fmt_tokens(u["in"])
-            out_t   = fmt_tokens(u["out"])
-            total_t = fmt_tokens(u["total"])
-            cost    = fmt_cost(u["cost"])
-            print(f"  {BW}{sender:<22}{NC}{D}{channel:<10}{NC}"
-                  f"{D}{calls:>6}{NC}{C}{in_t:>9}{NC}{G}{out_t:>9}{NC}"
-                  f"{BW}{total_t:>9}{NC}{Y}{cost:>10}{NC}")
+        for m in merged[:12]:
+            sender  = str(m["sender"])[:18]
+            channel = str(m["channel"])[:8]
+            label   = f"{sender} {D}[{channel}]"
+
+            def fmt_cell(s: dict) -> str:
+                return f"{fmt_tokens(s['total'])} {Y}{fmt_cost(s['cost'])}{NC}"
+
+            t_cell = f"{BW}{fmt_tokens(m['today']['total'])}{NC} {Y}{fmt_cost(m['today']['cost'])}{NC}"
+            w_cell = f"{BW}{fmt_tokens(m['week']['total'])}{NC}  {Y}{fmt_cost(m['week']['cost'])}{NC}"
+            a_cell = f"{BW}{fmt_tokens(m['all']['total'])}{NC}  {Y}{fmt_cost(m['all']['cost'])}{NC}"
+
+            print(f"  {BW}{sender:<{HDR_W}}{NC}")
+            print(f"  {D}  [{channel}]{NC}  "
+                  f"{BW}{fmt_tokens(m['today']['total']):>7}{NC} {Y}{fmt_cost(m['today']['cost']):>9}{NC}  "
+                  f"{BW}{fmt_tokens(m['week']['total']):>7}{NC} {Y}{fmt_cost(m['week']['cost']):>9}{NC}  "
+                  f"{BW}{fmt_tokens(m['all']['total']):>7}{NC} {Y}{fmt_cost(m['all']['cost']):>9}{NC}")
+
+    # ── Daily breakdown ───────────────────────────────────────
+    print(f"\n  {P3}{'═' * W}{NC}")
+    print(f"  {BOLD}DAILY BREAKDOWN  {D}(last 7 days, UTC date){NC}")
+    hr()
+
+    if not daily_stats:
+        print(f"  {D}No data in the last 7 days.{NC}")
+    else:
+        print(f"  {D}{'DATE':<12}{'CALLS':>6}{'INPUT':>9}{'OUTPUT':>9}{'TOTAL':>9}{'COST':>10}{NC}")
+        hr("·")
+        for day_key, ds in daily_stats:
+            print(f"  {P4}{day_key:<12}{NC}"
+                  f"{D}{ds['calls']:>6}{NC}"
+                  f"{C}{fmt_tokens(ds['in']):>9}{NC}"
+                  f"{G}{fmt_tokens(ds['out']):>9}{NC}"
+                  f"{BW}{fmt_tokens(ds['total']):>9}{NC}"
+                  f"{Y}{fmt_cost(ds['cost']):>10}{NC}")
+
+    # ── Daily per-user breakdown ──────────────────────────────
+    print(f"\n  {P3}{'═' * W}{NC}")
+    print(f"  {BOLD}DAILY × USER  {D}(last 7 days){NC}")
+    hr()
+
+    if not user_daily:
+        print(f"  {D}No data in the last 7 days.{NC}")
+    else:
+        for day_key, users in user_daily:
+            print(f"  {P4}{BOLD}{day_key}{NC}")
+            print(f"  {D}  {'SENDER':<20}{'CH':<10}{'CALLS':>6}{'INPUT':>8}{'OUTPUT':>8}{'TOTAL':>8}{'COST':>10}{NC}")
+            for u in users:
+                sender  = str(u["sender"])[:18]
+                channel = str(u["channel"])[:8]
+                print(f"  {BW}  {sender:<20}{NC}{D}{channel:<10}{NC}"
+                      f"{D}{u['calls']:>6}{NC}"
+                      f"{C}{fmt_tokens(u['in']):>8}{NC}"
+                      f"{G}{fmt_tokens(u['out']):>8}{NC}"
+                      f"{BW}{fmt_tokens(u['total']):>8}{NC}"
+                      f"{Y}{fmt_cost(u['cost']):>10}{NC}")
+            print()
 
     # ── Recent calls ──────────────────────────────────────────
-    print(f"\n  {P3}{'═' * W}{NC}")
+    print(f"  {P3}{'═' * W}{NC}")
     print(f"  {BOLD}RECENT CALLS{NC}")
     hr()
 

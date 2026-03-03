@@ -159,6 +159,49 @@ class LiteLLMProvider(LLMProvider):
                 finish_reason="error",
             )
 
+    # Fallback pricing table (USD per 1M tokens) for models where LiteLLM
+    # cannot compute cost automatically (e.g. via OpenRouter gateway).
+    # Matched by substring in the resolved model name (lowercase).
+    # Fallback pricing (USD/1M tokens). Verified on OpenRouter 2026-03-03.
+    # Keywords use dot notation (e.g. "claude-3.5-haiku") matching actual model IDs.
+    # More-specific entries must come before broader ones (first match wins).
+    _PRICE_TABLE: tuple[tuple[str, float, float], ...] = (
+        # Claude 4 series
+        ("claude-opus-4",          5.00,  25.00),  # 4.5 & 4.6
+        ("claude-sonnet-4",        3.00,  15.00),  # 4 / 4.5 / 4.6
+        ("claude-haiku-4",         1.00,   5.00),  # 4.5
+        # Claude 3.x series (dot separators match real model IDs)
+        ("claude-3.7-sonnet",      3.00,  15.00),
+        ("claude-3.5-sonnet",      6.00,  30.00),
+        ("claude-3.5-haiku",       0.80,   4.00),
+        ("claude-3-opus",         15.00,  75.00),
+        ("claude-3-haiku",         0.25,   1.25),
+        # OpenAI
+        ("gpt-4o-mini",            0.15,   0.60),
+        ("gpt-4o",                 2.50,  10.00),
+        # DeepSeek
+        ("deepseek-r1",            0.55,   2.19),
+        ("deepseek-v3",            0.27,   1.10),
+        ("deepseek-chat",          0.27,   1.10),
+        # Google
+        ("gemini-2.5-pro",         1.25,  10.00),
+        ("gemini-2.0-flash",       0.10,   0.40),
+        ("gemini-1.5-pro",         1.25,   5.00),
+        # Other
+        ("qwen-max",               1.60,   6.40),
+        ("qwen-plus",              0.40,   1.20),
+        ("glm-4",                  0.14,   0.14),
+        ("kimi-k2",                0.60,   2.50),
+    )
+
+    def _estimate_cost(self, model: str, prompt_tokens: int, completion_tokens: int) -> float:
+        """Estimate cost from the fallback price table when LiteLLM returns 0."""
+        model_lower = model.lower()
+        for keyword, in_price, out_price in self._PRICE_TABLE:
+            if keyword in model_lower:
+                return (prompt_tokens * in_price + completion_tokens * out_price) / 1_000_000
+        return 0.0
+
     def _record_usage(self, response: Any, model: str) -> None:
         """Record token usage and cost to ~/.nanobot/usage.jsonl."""
         try:
@@ -170,6 +213,13 @@ class LiteLLMProvider(LLMProvider):
                 cost = litellm.completion_cost(completion_response=response) or 0.0
             except Exception:
                 pass
+            # Fallback: estimate from price table when LiteLLM returns 0
+            if cost == 0.0:
+                cost = self._estimate_cost(
+                    model,
+                    usage.prompt_tokens or 0,
+                    usage.completion_tokens or 0,
+                )
             from nanobot.agent.usage import record
             record(
                 model=model,
