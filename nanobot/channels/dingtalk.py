@@ -2,7 +2,9 @@
 
 import asyncio
 import json
+import tempfile
 import time
+from pathlib import Path
 from typing import Any
 
 from loguru import logger
@@ -49,6 +51,25 @@ class NanobotDingTalkHandler(CallbackHandler):
             # Parse using SDK's ChatbotMessage for robust handling
             chatbot_msg = ChatbotMessage.from_dict(message.data)
 
+            sender_id = chatbot_msg.sender_staff_id or chatbot_msg.sender_id
+            sender_name = chatbot_msg.sender_nick or "Unknown"
+
+            msg_type = message.data.get("msgtype", "text")
+
+            # Handle audio messages
+            if msg_type == "audio":
+                download_code = message.data.get("audio", {}).get("downloadCode", "")
+                if download_code:
+                    logger.info(f"Received DingTalk audio message from {sender_name} ({sender_id})")
+                    task = asyncio.create_task(
+                        self.channel._on_audio_message(download_code, sender_id, sender_name)
+                    )
+                    self.channel._background_tasks.add(task)
+                    task.add_done_callback(self.channel._background_tasks.discard)
+                else:
+                    logger.warning("Received audio message with no downloadCode")
+                return AckMessage.STATUS_OK, "OK"
+
             # Extract text content; fall back to raw dict if SDK object is empty
             content = ""
             if chatbot_msg.text:
@@ -61,9 +82,6 @@ class NanobotDingTalkHandler(CallbackHandler):
                     f"Received empty or unsupported message type: {chatbot_msg.message_type}"
                 )
                 return AckMessage.STATUS_OK, "OK"
-
-            sender_id = chatbot_msg.sender_staff_id or chatbot_msg.sender_id
-            sender_name = chatbot_msg.sender_nick or "Unknown"
 
             logger.info(f"Received DingTalk message from {sender_name} ({sender_id}): {content}")
 
@@ -96,8 +114,8 @@ class DingTalkChannel(BaseChannel):
 
     name = "dingtalk"
 
-    def __init__(self, config: DingTalkConfig, bus: MessageBus):
-        super().__init__(config, bus)
+    def __init__(self, config: DingTalkConfig, bus: MessageBus, groq_api_key: str = ""):
+        super().__init__(config, bus, groq_api_key=groq_api_key)
         self.config: DingTalkConfig = config
         self._client: Any = None
         self._http: httpx.AsyncClient | None = None
@@ -257,3 +275,81 @@ class DingTalkChannel(BaseChannel):
             )
         except Exception as e:
             logger.error(f"Error publishing DingTalk message: {e}")
+
+    async def _on_audio_message(self, download_code: str, sender_id: str, sender_name: str) -> None:
+        """Handle incoming audio message: download, transcribe, then forward as text."""
+        try:
+            # Step 1: Get download URL from DingTalk API
+            token = await self._get_access_token()
+            if not token:
+                logger.error("Cannot process audio: failed to get access token")
+                return
+
+            download_url = await self._get_audio_download_url(token, download_code)
+            if not download_url:
+                logger.error("Cannot process audio: failed to get download URL")
+                await self._on_message("[语音消息：无法下载]", sender_id, sender_name)
+                return
+
+            # Step 2: Download audio file to temp dir
+            audio_path = await self._download_audio_file(download_url)
+            if not audio_path:
+                logger.error("Cannot process audio: download failed")
+                await self._on_message("[语音消息：下载失败]", sender_id, sender_name)
+                return
+
+            # Step 3: Transcribe with Groq (shared base method handles format conversion)
+            try:
+                transcription = await self._transcribe_audio(audio_path)
+            finally:
+                # Clean up temp file
+                try:
+                    Path(audio_path).unlink(missing_ok=True)
+                except Exception:
+                    pass
+
+            if transcription:
+                logger.info(f"DingTalk audio transcribed from {sender_name}: {transcription[:80]}...")
+                await self._on_message(transcription, sender_id, sender_name)
+            else:
+                logger.warning("Audio transcription returned empty result")
+                await self._on_message("[语音消息：转录失败，请发送文字]", sender_id, sender_name)
+
+        except Exception as e:
+            logger.error(f"Error processing DingTalk audio message: {e}")
+
+    async def _get_audio_download_url(self, token: str, download_code: str) -> str | None:
+        """Call DingTalk API to get a temporary download URL for an audio file."""
+        if not self._http:
+            return None
+        url = "https://api.dingtalk.com/v1.0/robot/messageFiles/download"
+        headers = {"x-acs-dingtalk-access-token": token}
+        body = {"downloadCode": download_code, "robotCode": self.config.client_id}
+        try:
+            resp = await self._http.post(url, json=body, headers=headers, timeout=15.0)
+            resp.raise_for_status()
+            return resp.json().get("downloadUrl")
+        except Exception as e:
+            logger.error(f"Failed to get DingTalk audio download URL: {e}")
+            return None
+
+    async def _download_audio_file(self, url: str) -> str | None:
+        """Download audio from URL to a temporary file. Returns local path or None."""
+        if not self._http:
+            return None
+        try:
+            resp = await self._http.get(url, timeout=30.0, follow_redirects=True)
+            resp.raise_for_status()
+            # DingTalk voice messages are typically AMR; use .amr extension
+            suffix = ".amr"
+            content_type = resp.headers.get("content-type", "")
+            if "mp4" in content_type or "m4a" in content_type:
+                suffix = ".m4a"
+            elif "ogg" in content_type:
+                suffix = ".ogg"
+            with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as f:
+                f.write(resp.content)
+                return f.name
+        except Exception as e:
+            logger.error(f"Failed to download DingTalk audio file: {e}")
+            return None

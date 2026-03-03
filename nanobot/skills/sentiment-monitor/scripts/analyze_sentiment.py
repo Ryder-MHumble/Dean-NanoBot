@@ -484,6 +484,183 @@ def load_data_from_supabase(config: Dict, target_date: str) -> Dict[str, List[Di
     return all_data
 
 
+def normalize_raw_supabase_items(items: List[Dict]) -> List[Dict]:
+    """
+    将原始 Supabase contents 记录归一化为统一格式（无需经过 legacy 转换）。
+    用于官方账号维度分析。
+    """
+    normalized = []
+    for item in items:
+        try:
+            platform = item.get("platform", "unknown")
+            content_text = f"{item.get('title', '')} {item.get('description', '')}".strip()
+            if not content_text:
+                continue
+
+            ts = item.get("publish_time", 0)
+            if ts and ts > 10000000000:
+                ts = ts / 1000
+
+            normalized.append({
+                "id": item.get("content_id", ""),
+                "platform": platform,
+                "type": item.get("content_type", "post"),
+                "title": item.get("title", ""),
+                "content": content_text,
+                "url": item.get("content_url", ""),
+                "created_at": ts,
+                "author": {
+                    "id": item.get("user_id", ""),
+                    "name": item.get("nickname", ""),
+                    "avatar": item.get("avatar", "")
+                },
+                "engagement": {
+                    "likes": item.get("liked_count", 0) or 0,
+                    "comments": item.get("comment_count", 0) or 0,
+                    "shares": item.get("share_count", 0) or 0,
+                    "collects": item.get("collected_count", 0) or 0,
+                },
+                "tags": [],
+                "source_keyword": item.get("source_keyword", ""),
+                "raw": item
+            })
+        except Exception:
+            continue
+    return normalized
+
+
+def extract_comment_themes(comments: List[Dict], config: Dict, top_n: int = 5) -> List[Dict]:
+    """
+    从评论列表中提取高频主题关键词，附代表性评论。
+
+    Returns:
+        List of {keyword, count, top_comment, sentiment}
+    """
+    # 简单停用词
+    stopwords = {"的", "了", "是", "在", "我", "你", "他", "她", "它", "们", "这", "那", "有",
+                 "和", "也", "都", "不", "就", "啊", "吧", "嗯", "哦", "哈", "呢", "吗"}
+
+    keyword_counter: Counter = Counter()
+    keyword_best_comment: Dict[str, Dict] = {}
+
+    positive_kws = set(config["sentiment_keywords"]["positive"])
+    negative_kws = set(config["sentiment_keywords"]["negative"])
+
+    for comment in comments:
+        text = comment.get("content", "") or comment.get("comment_content", "")
+        if not text:
+            continue
+        like_count = comment.get("like_count", 0) or 0
+        # 分词（简单字符级，适合中文关键词）
+        for kw in list(positive_kws) + list(negative_kws):
+            if kw in text and kw not in stopwords:
+                keyword_counter[kw] += 1
+                existing = keyword_best_comment.get(kw)
+                if not existing or like_count > existing.get("like_count", 0):
+                    keyword_best_comment[kw] = {
+                        "text": text[:80],
+                        "like_count": like_count,
+                        "author": comment.get("nickname", "")
+                    }
+
+    themes = []
+    for kw, count in keyword_counter.most_common(top_n):
+        label, _, _ = classify_sentiment(kw, config)
+        themes.append({
+            "keyword": kw,
+            "count": count,
+            "sentiment": label,
+            "top_comment": keyword_best_comment.get(kw, {})
+        })
+    return themes
+
+
+def analyze_account_data(
+    account_items_raw: List[Dict],
+    comments_data: Dict[str, List[Dict]],
+    config: Dict
+) -> Dict[str, Any]:
+    """
+    官方账号维度分析。
+
+    Args:
+        account_items_raw: 原始 Supabase 官方账号数据（source_keyword LIKE '@%'）
+        comments_data: content_id → [comment]
+        config: 配置字典
+
+    Returns:
+        账号维度分析结果，包含：
+        - accounts: 各账号的帖子数/互动量/情感
+        - top_posts: 全局互动量 TOP 帖子
+        - comment_themes: 评论高频主题
+        - competitor_comparison: 各账号对比
+    """
+    items = normalize_raw_supabase_items(account_items_raw)
+
+    # 为每条帖子分类情感并关联评论
+    all_comments: List[Dict] = []
+    for item in items:
+        label, score, confidence = classify_sentiment(item["content"], config)
+        item["sentiment"] = {"label": label, "score": score, "confidence": confidence}
+
+        item_comments = comments_data.get(item["id"], [])
+        item["comments"] = item_comments
+        all_comments.extend(item_comments)
+
+    # 按 source_keyword (账号名) 分组
+    account_map: Dict[str, Dict] = {}
+    for item in items:
+        key = item["source_keyword"] or item["author"]["name"] or "unknown"
+        if key not in account_map:
+            account_map[key] = {
+                "account": key,
+                "platform": item["platform"],
+                "posts": [],
+                "total_engagement": 0,
+                "sentiment_dist": {"positive": 0, "neutral": 0, "negative": 0},
+                "comment_count": 0
+            }
+        eng = sum(item["engagement"].values())
+        account_map[key]["posts"].append(item)
+        account_map[key]["total_engagement"] += eng
+        account_map[key]["sentiment_dist"][item["sentiment"]["label"]] += 1
+        account_map[key]["comment_count"] += len(item["comments"])
+
+    # 汇总各账号指标
+    accounts = []
+    for key, data in account_map.items():
+        post_count = len(data["posts"])
+        data["post_count"] = post_count
+        data["avg_engagement"] = round(data["total_engagement"] / post_count, 1) if post_count else 0
+        # TOP 3 帖子
+        data["top_posts"] = sorted(
+            data["posts"], key=lambda x: sum(x["engagement"].values()), reverse=True
+        )[:3]
+        accounts.append(data)
+
+    # 全局 TOP 帖子（按互动量）
+    top_posts = sorted(items, key=lambda x: sum(x["engagement"].values()), reverse=True)[:10]
+
+    # 评论主题
+    comment_themes = extract_comment_themes(all_comments, config)
+
+    # 情感总览
+    all_sentiments = Counter(item["sentiment"]["label"] for item in items)
+    total = len(items)
+    sentiment_pct = {k: round(v / total * 100, 1) for k, v in all_sentiments.items()} if total else {}
+
+    return {
+        "accounts": accounts,
+        "top_posts": top_posts,
+        "comment_themes": comment_themes,
+        "total_posts": total,
+        "total_comments": len(all_comments),
+        "sentiment_dist": dict(all_sentiments),
+        "sentiment_pct": sentiment_pct,
+        "all_items": items
+    }
+
+
 def classify_competitor(text: str, config: Dict) -> str:
     """判断内容属于哪个机构"""
     competitor_keywords = config.get("competitor_keywords", {})

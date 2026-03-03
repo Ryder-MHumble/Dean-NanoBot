@@ -1,26 +1,28 @@
 ---
 name: sentiment-monitor
-description: Daily sentiment monitoring / 每日舆情监控. Analyzes social media data from Supabase (Xiaohongshu, Douyin, Bilibili, Weibo) about the research institute, generates professional sentiment reports with risk alerts, trending topics, and account monitoring. Use when (1) setting up daily monitoring (2) generating sentiment report (3) analyzing social media data (4) running sentiment monitoring
+description: Daily sentiment monitoring / 每日舆情监控. Generates a dual-dimension report from Supabase data: (1) Official account operations analysis — account post performance, comment themes, competitor account comparison; (2) Full-network sentiment insights — real risks with response plans, positive opportunities, immediately executable action checklist. Use when (1) setting up daily monitoring (2) generating sentiment report (3) analyzing social media data (4) running sentiment monitoring
 metadata: {"nanobot":{"emoji":"📊","requires":{"bins":["python3"]}}}
 ---
 
 # Sentiment Monitor
 
-Automated daily sentiment monitoring for research institute leadership.
+Automated daily sentiment monitoring for research institute leadership. Generates a **dual-dimension report** focusing on actionable, specific insights rather than generic recommendations.
 
 ## Overview
 
-This skill enables automated analysis of social media content across multiple Chinese platforms (Xiaohongshu, Douyin, Bilibili, Weibo) using data stored in Supabase, followed by AI-powered sentiment analysis and professional report generation.
+Two-dimension analysis from Supabase data:
 
-**Key Features**:
-- Multi-platform data collection (4 major Chinese social platforms)
-- Automated sentiment classification (positive/neutral/negative)
-- Risk detection and alerts
-- Trending topic extraction
-- KOL (Key Opinion Leader) identification
-- **Competitor comparison analysis** (vs 深圳河套研究院, 上海创智研究院)
-- **Negative content traceability** (detailed source links and comments)
-- Professional reports for leadership decision-making
+**Dimension 1 — 官方账号运营分析**:
+- Official account post performance (source_keyword LIKE '@%')
+- User comment theme extraction with representative quotes
+- Competitor account comparison (北京中关村学院 vs 创智 vs 河套)
+- ≤5 specific, data-driven content operation recommendations
+
+**Dimension 2 — 全网舆情洞察**:
+- Concise volume overview (sentiment distribution + platform breakdown)
+- Key risks with original content links and specific response plans
+- Positive opportunities to amplify
+- Immediately executable action checklist (3-5 items)
 
 ## When to Use
 
@@ -127,70 +129,22 @@ Report formatting module (imported by run_monitor.py).
 
 ## Report Structure
 
-The generated report includes these sections:
+The generated report has two clearly separated dimensions:
 
-### 1. Executive Summary
-- Overall sentiment (positive/neutral/negative percentages)
-- Total mentions across platforms
-- Key findings
-- Urgent action items
+### 维度一：官方账号运营分析
 
-### 2. Competitor Comparison Analysis
-- Side-by-side comparison with 深圳河套研究院 and 上海创智研究院
-- Sentiment distribution comparison
-- Engagement metrics comparison
-- Competitive insights and recommendations
+1. **账号概览** — 各账号帖子数/总互动/平均互动/正面占比
+2. **高互动帖子** — TOP 3 帖子，含互动分解和原文链接
+3. **评论主题洞察** — 高频关键词 + 代表性评论原文
+4. **竞品账号对比** — 横向对比表 + 差距/优势洞察
+5. **内容运营建议** — 两部分：① 本周选题建议（交叉引用全网热点/竞品高互动帖/自身爆款/用户正面评论主题，每条注明数据来源）；② 执行层面（回应负面评论、提升低互动账号、追赶竞品）
 
-### 3. Sentiment Overview
-- Sentiment distribution table
-- Trend comparison (vs previous day)
-- Text-based charts
+### 维度二：全网舆情洞察
 
-### 4. Platform Analysis
-For each platform (Xiaohongshu, Douyin, Bilibili, Weibo):
-- Total posts/videos
-- Average engagement
-- Top content (high engagement items)
-- Key topics
-
-### 5. Risk Alerts
-Prioritized list of risks requiring attention:
-- **High Priority**: Issues needing immediate action
-- **Medium Priority**: Issues to monitor
-
-Each alert includes:
-- Source content
-- Sentiment analysis
-- Issue description
-- Recommended action
-
-### 6. Negative Content Details
-- **Complete list of all negative posts** about 中关村人工智能研究院
-- Full content preview with source links
-- All comments under each negative post
-- Easy traceability for response and handling
-
-### 7. Trending Topics
-- Top 5 topics by frequency and engagement
-- Associated hashtags
-- Content themes
-- Sentiment by topic
-
-### 8. Comments Analysis
-- Overall comment sentiment distribution
-- High-risk comments detection
-- Comment management recommendations
-
-### 9. Account Monitoring
-- KOL identification (high-influence accounts)
-- Active creators
-- Account health metrics
-- No spam/bot detection
-
-### 10. Recommendations
-- Immediate actions (this week)
-- Short-term strategy (this month)
-- Long-term initiatives (this quarter)
+1. **声量总览** — 简表（帖子数/评论数/互动量/情感分布/平台分布）
+2. **关键风险** — 仅高/中优先级，每条附原文链接 + 具体回应方案
+3. **正向机会** — 可转发/借势的高互动正面内容，每条附操作建议
+4. **立即执行清单** — 3-5 条带优先级的具体行动 checkbox
 
 ## Configuration
 

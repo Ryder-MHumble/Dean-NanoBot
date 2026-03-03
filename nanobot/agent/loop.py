@@ -20,6 +20,7 @@ from nanobot.agent.tools.spawn import SpawnTool
 from nanobot.agent.tools.cron import CronTool
 from nanobot.agent.subagent import SubagentManager
 from nanobot.session.manager import SessionManager
+from nanobot.agent import usage as _usage
 
 
 class AgentLoop:
@@ -206,7 +207,10 @@ class AgentLoop:
         cron_tool = self.tools.get("cron")
         if isinstance(cron_tool, CronTool):
             cron_tool.set_context(msg.channel, msg.chat_id)
-        
+
+        # Bind sender to usage context so every LLM call in this turn is attributed
+        _usage.set_context(msg.sender_id, msg.channel)
+
         # Build initial messages (use get_history for LLM-formatted messages)
         messages = self.context.build_messages(
             history=session.get_history(),
@@ -316,7 +320,10 @@ class AgentLoop:
         cron_tool = self.tools.get("cron")
         if isinstance(cron_tool, CronTool):
             cron_tool.set_context(origin_channel, origin_chat_id)
-        
+
+        # Attribute cron/system calls to the origin chat_id (the user who set up the job)
+        _usage.set_context(origin_chat_id, origin_channel)
+
         # Build messages with the announce content
         messages = self.context.build_messages(
             history=session.get_history(),

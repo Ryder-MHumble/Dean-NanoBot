@@ -1,6 +1,7 @@
 """Base channel interface for chat platforms."""
 
 from abc import ABC, abstractmethod
+from pathlib import Path
 from typing import Any
 
 from loguru import logger
@@ -12,23 +13,25 @@ from nanobot.bus.queue import MessageBus
 class BaseChannel(ABC):
     """
     Abstract base class for chat channel implementations.
-    
+
     Each channel (Telegram, Discord, etc.) should implement this interface
     to integrate with the nanobot message bus.
     """
-    
+
     name: str = "base"
-    
-    def __init__(self, config: Any, bus: MessageBus):
+
+    def __init__(self, config: Any, bus: MessageBus, *, groq_api_key: str = ""):
         """
         Initialize the channel.
-        
+
         Args:
             config: Channel-specific configuration.
             bus: The message bus for communication.
+            groq_api_key: Optional Groq API key for voice transcription.
         """
         self.config = config
         self.bus = bus
+        self.groq_api_key = groq_api_key
         self._running = False
     
     @abstractmethod
@@ -121,6 +124,23 @@ class BaseChannel(ABC):
         
         await self.bus.publish_inbound(msg)
     
+    async def _transcribe_audio(self, file_path: str | Path) -> str:
+        """
+        Transcribe a local audio file to text using Groq Whisper.
+
+        Handles format conversion (AMR → WAV via ffmpeg) transparently.
+        The caller is responsible for deleting the source file afterwards.
+
+        Args:
+            file_path: Path to the downloaded audio file.
+
+        Returns:
+            Transcribed text, or empty string on failure.
+        """
+        from nanobot.providers.transcription import GroqTranscriptionProvider
+        transcriber = GroqTranscriptionProvider(api_key=self.groq_api_key or None)
+        return await transcriber.transcribe(file_path)
+
     @property
     def is_running(self) -> bool:
         """Check if the channel is running."""

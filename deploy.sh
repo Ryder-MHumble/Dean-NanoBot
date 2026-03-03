@@ -145,6 +145,20 @@ ensure_dirs() {
     mkdir -p "$LOG_DIR" "$NANOBOT_DIR/sessions" "$NANOBOT_DIR/workspace"
 }
 
+# Copy workspace default files (SOUL.md, AGENTS.md, USER.md) from project to workspace.
+# Always overwrites so server stays in sync with repo.
+sync_workspace_defaults() {
+    local defaults_dir="$PROJECT_DIR/workspace-defaults"
+    [[ -d "$defaults_dir" ]] || return 0
+    local copied=0
+    for f in "$defaults_dir"/*; do
+        [[ -f "$f" ]] || continue
+        cp "$f" "$NANOBOT_DIR/workspace/$(basename "$f")"
+        copied=$((copied + 1))
+    done
+    [[ $copied -gt 0 ]] && ok "Workspace defaults synced ${D}($copied files)${NC}"
+}
+
 # Generate ~/.nanobot/config.json from .env if it doesn't exist
 gen_config() {
     [[ -f "$CONFIG_FILE" ]] && return 0
@@ -421,6 +435,7 @@ cmd_deploy() {
 
     # 6. Directories
     ensure_dirs && ok "Data directories"
+    sync_workspace_defaults
 
     # 7. Config
     if [[ ! -f "$CONFIG_FILE" ]]; then
@@ -482,6 +497,7 @@ cmd_init() {
     install_extra_deps && ok "Extra dependencies ${D}(supabase)${NC}"
 
     ensure_dirs && ok "Data directories"
+    sync_workspace_defaults
 
     if [[ ! -f "$CONFIG_FILE" ]]; then
         if [[ -f "$ENV_FILE" ]]; then
@@ -591,6 +607,7 @@ cmd_help() {
     printf "   ${G}status${NC}     Show dashboard\n"
     printf "   ${G}logs${NC}       View logs ${D}(-f to follow)${NC}\n"
     printf "   ${G}monitor${NC}    Real-time resource dashboard\n"
+    printf "   ${G}api-dash${NC}   API token & cost dashboard ${D}(-i N for interval)${NC}\n"
     printf "   ${G}help${NC}       This message\n"
 
     printf "\n ${BOLD}Options${NC}\n\n"
@@ -619,6 +636,17 @@ cmd_monitor() {
     exec "$script" "$@"
 }
 
+cmd_api_dash() {
+    local script="$PROJECT_DIR/api_dash.py"
+    if [[ ! -f "$script" ]]; then
+        fail "api_dash.py not found"; return 1
+    fi
+    if ! ensure_venv; then
+        fail "No virtual environment — run: ./deploy.sh init"; return 1
+    fi
+    exec python3 "$script" "$@"
+}
+
 # ── Parse Args ────────────────────────────────────────────────
 COMMAND="${1:-deploy}"
 shift 2>/dev/null || true
@@ -641,6 +669,7 @@ case "$COMMAND" in
     status)         cmd_status ;;
     logs)           cmd_logs ;;
     monitor)        cmd_monitor ;;
+    api-dash)       cmd_api_dash "$@" ;;
     help|--help|-h) cmd_help ;;
     *)              fail "Unknown command: $COMMAND"; cmd_help; exit 1 ;;
 esac

@@ -270,6 +270,52 @@ class SentimentSupabaseClient:
 
         return converted
 
+    def get_official_account_contents(self, platform: Optional[str] = None) -> List[Dict]:
+        """
+        获取官方账号来源的内容（source_keyword 以 @ 开头）
+
+        Args:
+            platform: 平台过滤 (xhs, douyin, bili, wb)，None 表示全平台
+
+        Returns:
+            内容列表
+        """
+        query = self.client.table("contents").select("*").like("source_keyword", "@%")
+
+        if platform:
+            query = query.eq("platform", platform)
+
+        try:
+            response = query.execute()
+            print(f"   Loaded {len(response.data)} official account items from {platform or 'all platforms'}")
+            return response.data
+        except Exception as e:
+            print(f"❌ Error loading official account contents: {e}")
+            return []
+
+    def get_keyword_search_contents(self, platform: Optional[str] = None) -> List[Dict]:
+        """
+        获取关键词搜索来源的内容（source_keyword 不以 @ 开头）
+
+        Args:
+            platform: 平台过滤 (xhs, douyin, bili, wb)，None 表示全平台
+
+        Returns:
+            内容列表
+        """
+        query = self.client.table("contents").select("*").not_.like("source_keyword", "@%")
+
+        if platform:
+            query = query.eq("platform", platform)
+
+        try:
+            response = query.execute()
+            print(f"   Loaded {len(response.data)} keyword search items from {platform or 'all platforms'}")
+            return response.data
+        except Exception as e:
+            print(f"❌ Error loading keyword search contents: {e}")
+            return []
+
     # ==================== 统计查询 ====================
 
     def get_platform_stats(

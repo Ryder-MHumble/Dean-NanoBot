@@ -1,5 +1,5 @@
 ---
-name: zkygyzlyj-data-api
+name: fetch data engine
 description: Use when users ask for data about Chinese AI policy, government personnel changes, university news, social media sentiment (Xiaohongshu/Douyin/Bilibili/Weibo), or faculty/scholar information from the institute's intelligence system. First queries available sources via API, then identifies matching data, and generates executable Python scripts to fetch and display results.
 ---
 

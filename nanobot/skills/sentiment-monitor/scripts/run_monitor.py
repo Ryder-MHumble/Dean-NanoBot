@@ -1,16 +1,17 @@
 #!/usr/bin/env python3
 """
-Sentiment Monitoring Script - Supabase Only
+Sentiment Monitoring Script - Dual Dimension
 
-Loads data from Supabase, performs sentiment analysis, and generates report.
-No local crawler execution needed.
+加载官方账号数据 + 关键词搜索数据，分别分析后生成双维度报告：
+  维度一：官方账号运营分析
+  维度二：全网舆情洞察
 """
 
 import json
 import os
 import sys
 from pathlib import Path
-from typing import Dict, List, Any
+from typing import Dict, List, Any, Tuple
 
 # 加载 .env 文件（从项目根目录向上查找）
 try:
@@ -25,10 +26,10 @@ try:
 except ImportError:
     pass  # dotenv 不可用时静默跳过，依赖已设置的环境变量
 
-from analyze_sentiment import analyze_all_data
+from analyze_sentiment import analyze_all_data, analyze_account_data
 try:
     from generate_report_v2 import generate_report
-    print("✅ Using optimized report generator v2.0")
+    print("✅ Using dual-dimension report generator v3.0")
 except ImportError:
     from generate_report import generate_report
     print("⚠️  Using legacy report generator")
@@ -43,35 +44,68 @@ def load_config() -> Dict[str, Any]:
     return json.loads(expanded)
 
 
-def load_all_data(config: Dict) -> tuple[Dict[str, List[Dict]], Dict[str, List[Dict]]]:
-    """Load all available data from Supabase."""
+def load_official_data(config: Dict) -> Tuple[List[Dict], Dict[str, List[Dict]]]:
+    """
+    加载官方账号数据（source_keyword LIKE '@%'）及其评论。
+
+    Returns:
+        (account_items_raw, comments_by_id)
+    """
     from supabase_client import SentimentSupabaseClient
 
-    print(f"\n📊 Loading data from Supabase...")
+    print(f"\n📊 Loading official account data...")
+    supabase_client = SentimentSupabaseClient(config)
+
+    account_items = supabase_client.get_official_account_contents()
+    print(f"✅ Loaded {len(account_items)} official account posts")
+
+    if not account_items:
+        return [], {}
+
+    content_ids = [item["content_id"] for item in account_items if item.get("content_id")]
+    comments_data = supabase_client.get_comments_by_content_ids(content_ids)
+    total_comments = sum(len(v) for v in comments_data.values())
+    print(f"✅ Loaded {total_comments} comments for official account posts")
+
+    return account_items, comments_data
+
+
+def load_keyword_data(config: Dict) -> Tuple[Dict[str, List[Dict]], Dict[str, List[Dict]]]:
+    """
+    加载关键词搜索数据（source_keyword NOT LIKE '@%'）及其评论。
+
+    Returns:
+        (all_data_by_platform, comments_by_id)
+    """
+    from supabase_client import SentimentSupabaseClient
+
+    print(f"\n📊 Loading keyword search data...")
     supabase_client = SentimentSupabaseClient(config)
 
     all_data = {}
     for platform in config["platforms"]:
-        items = supabase_client.get_all_contents(platform)
-        converted_items = supabase_client.convert_to_legacy_format(items, platform)
-        all_data[platform] = converted_items
+        raw_items = supabase_client.get_keyword_search_contents(platform)
+        converted = supabase_client.convert_to_legacy_format(raw_items, platform)
+        all_data[platform] = converted
 
-    total_items = sum(len(data) for data in all_data.values())
-    print(f"✅ Loaded {total_items} posts")
+    total_items = sum(len(d) for d in all_data.values())
+    print(f"✅ Loaded {total_items} keyword search posts")
 
-    # Load comments
-    print(f"\n📊 Loading comments...")
+    if total_items == 0:
+        return all_data, {}
+
+    # 收集所有 content_id 以便加载评论
     content_ids = set()
     for platform_data in all_data.values():
         for item in platform_data:
-            if isinstance(item, dict):
-                for id_field in ['note_id', 'aweme_id', 'video_id', 'mblog_id']:
-                    if id_field in item and item[id_field]:
-                        content_ids.add(item[id_field])
-                        break
+            for id_field in ['note_id', 'aweme_id', 'video_id', 'mblog_id']:
+                if id_field in item and item[id_field]:
+                    content_ids.add(item[id_field])
+                    break
 
     comments_data = supabase_client.get_comments_by_content_ids(list(content_ids))
-    print(f"✅ Loaded {sum(len(v) for v in comments_data.values())} comments")
+    total_comments = sum(len(v) for v in comments_data.values())
+    print(f"✅ Loaded {total_comments} comments for keyword search posts")
 
     return all_data, comments_data
 
@@ -79,7 +113,7 @@ def load_all_data(config: Dict) -> tuple[Dict[str, List[Dict]], Dict[str, List[D
 def main():
     """Main execution function."""
     print("=" * 70)
-    print("🤖 Sentiment Monitoring System")
+    print("🤖 Sentiment Monitoring System - Dual Dimension v3.0")
     print("=" * 70)
 
     try:
@@ -92,63 +126,92 @@ def main():
     print(f"🔍 Keywords: {', '.join(config['keywords'])}")
     print(f"📱 Platforms: {', '.join(config['platforms'])}")
 
-    # Load data from Supabase
+    account_analysis = None
+    fullvolume_analysis = None
+
+    # ── Dimension 1: Official Account Data ──────────────────────────────
     print("\n" + "=" * 70)
-    print("Step 1: Loading Data from Supabase")
-    print("=" * 70)
-
-    all_data, comments_data = load_all_data(config)
-    total_items = sum(len(data) for data in all_data.values())
-
-    if total_items == 0:
-        print("\n❌ Error: No data found in Supabase", file=sys.stderr)
-        sys.exit(1)
-
-    # Perform sentiment analysis
-    print("\n" + "=" * 70)
-    print("Step 2: Sentiment Analysis")
+    print("Step 1: Loading Official Account Data")
     print("=" * 70)
 
     try:
-        print("🔄 Analyzing sentiment, detecting risks, extracting topics...")
-        analysis = analyze_all_data(all_data, config=config, comments_data=comments_data)
-        print("✅ Analysis completed")
-
-        metrics = analysis["metrics"]
-        comments_stats = analysis.get("comments_analysis", {})
-        print(f"\n📊 Analysis Summary:")
-        print(f"   Total items: {metrics['total_items']}")
-        print(f"   Total comments: {comments_stats.get('total_comments', 0)}")
-        print(f"   Positive: {metrics['sentiment_pct'].get('positive', 0)}%")
-        print(f"   Neutral: {metrics['sentiment_pct'].get('neutral', 0)}%")
-        print(f"   Negative: {metrics['sentiment_pct'].get('negative', 0)}%")
-        print(f"   Risks detected: {len(analysis['risks'])}")
-        print(f"   Topics found: {len(analysis['topics'])}")
-        print(f"   KOLs identified: {len(analysis['kols'])}")
-
+        account_items_raw, account_comments = load_official_data(config)
+        if account_items_raw:
+            print("\n🔄 Analyzing official account data...")
+            account_analysis = analyze_account_data(account_items_raw, account_comments, config)
+            print(f"✅ Account analysis complete: {account_analysis['total_posts']} posts, "
+                  f"{account_analysis['total_comments']} comments")
+        else:
+            print("⚠️  No official account data found, skipping account dimension")
     except Exception as e:
-        print(f"❌ Error during analysis: {e}", file=sys.stderr)
+        print(f"⚠️  Account data loading failed: {e}", file=sys.stderr)
         import traceback
         traceback.print_exc()
+
+    # ── Dimension 2: Keyword Search Data ────────────────────────────────
+    print("\n" + "=" * 70)
+    print("Step 2: Loading Keyword Search Data")
+    print("=" * 70)
+
+    try:
+        keyword_data, keyword_comments = load_keyword_data(config)
+        total_keyword_items = sum(len(d) for d in keyword_data.values())
+
+        if total_keyword_items > 0:
+            print("\n🔄 Analyzing keyword search data...")
+            fullvolume_analysis = analyze_all_data(
+                all_data=keyword_data,
+                config=config,
+                comments_data=keyword_comments
+            )
+            metrics = fullvolume_analysis["metrics"]
+            print(f"✅ Full-volume analysis complete:")
+            print(f"   Total items: {metrics['total_items']}")
+            print(f"   Positive: {metrics['sentiment_pct'].get('positive', 0)}%")
+            print(f"   Neutral:  {metrics['sentiment_pct'].get('neutral', 0)}%")
+            print(f"   Negative: {metrics['sentiment_pct'].get('negative', 0)}%")
+            print(f"   Risks detected: {len(fullvolume_analysis['risks'])}")
+        else:
+            print("⚠️  No keyword search data found, skipping full-volume dimension")
+    except Exception as e:
+        print(f"⚠️  Keyword data loading failed: {e}", file=sys.stderr)
+        import traceback
+        traceback.print_exc()
+
+    if account_analysis is None and fullvolume_analysis is None:
+        print("\n❌ Error: No data available for any dimension", file=sys.stderr)
         sys.exit(1)
 
-    # Generate report
+    # ── Report Generation ────────────────────────────────────────────────
     print("\n" + "=" * 70)
     print("Step 3: Report Generation")
     print("=" * 70)
 
     try:
-        print("🔄 Generating professional report...")
-        report = generate_report(analysis)
-        print("✅ Report generated successfully")
+        print("🔄 Generating dual-dimension report...")
+        combined_analysis = {
+            "metadata": {
+                "analysis_date": __import__("datetime").datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                "data_date": "全量数据"
+            }
+        }
+        if account_analysis is not None:
+            combined_analysis["account_analysis"] = account_analysis
+        if fullvolume_analysis is not None:
+            combined_analysis["fullvolume_analysis"] = fullvolume_analysis
+            combined_analysis["metadata"]["data_date"] = fullvolume_analysis.get(
+                "metadata", {}
+            ).get("data_date", "全量数据")
 
+        report = generate_report(combined_analysis)
+        print("✅ Report generated successfully")
     except Exception as e:
         print(f"❌ Error generating report: {e}", file=sys.stderr)
         import traceback
         traceback.print_exc()
         sys.exit(1)
 
-    # Output report
+    # ── Output ───────────────────────────────────────────────────────────
     print("\n" + "=" * 70)
     print("GENERATED REPORT")
     print("=" * 70 + "\n")

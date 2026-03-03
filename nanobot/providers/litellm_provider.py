@@ -150,6 +150,7 @@ class LiteLLMProvider(LLMProvider):
         
         try:
             response = await acompletion(**kwargs)
+            self._record_usage(response, model)
             return self._parse_response(response)
         except Exception as e:
             # Return error as content for graceful handling
@@ -157,7 +158,28 @@ class LiteLLMProvider(LLMProvider):
                 content=f"Error calling LLM: {str(e)}",
                 finish_reason="error",
             )
-    
+
+    def _record_usage(self, response: Any, model: str) -> None:
+        """Record token usage and cost to ~/.nanobot/usage.jsonl."""
+        try:
+            usage = getattr(response, "usage", None)
+            if not usage:
+                return
+            cost = 0.0
+            try:
+                cost = litellm.completion_cost(completion_response=response) or 0.0
+            except Exception:
+                pass
+            from nanobot.agent.usage import record
+            record(
+                model=model,
+                prompt_tokens=usage.prompt_tokens or 0,
+                completion_tokens=usage.completion_tokens or 0,
+                cost_usd=cost,
+            )
+        except Exception:
+            pass  # never crash the main flow
+
     def _parse_response(self, response: Any) -> LLMResponse:
         """Parse LiteLLM response into our standard format."""
         choice = response.choices[0]
