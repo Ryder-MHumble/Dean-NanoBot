@@ -178,14 +178,7 @@ config = {
             "maxToolIterations": 20
         }
     },
-    "channels": {
-        "dingtalk": {
-            "enabled": True,
-            "clientId":     os.environ.get("NANOBOT_CHANNELS__DINGTALK__CLIENT_ID", ""),
-            "clientSecret": os.environ.get("NANOBOT_CHANNELS__DINGTALK__CLIENT_SECRET", ""),
-            "allowFrom": []
-        }
-    },
+    "channels": {},
     "providers": {
         "openrouter": {
             "apiKey":       os.environ.get("NANOBOT_PROVIDERS__OPENROUTER__API_KEY", ""),
@@ -198,6 +191,60 @@ config = {
         "port": int(os.environ.get("NANOBOT_GATEWAY__PORT", "18790"))
     }
 }
+
+# DingTalk
+if os.environ.get("NANOBOT_CHANNELS__DINGTALK__ENABLED", "").lower() == "true":
+    config["channels"]["dingtalk"] = {
+        "enabled": True,
+        "clientId":     os.environ.get("NANOBOT_CHANNELS__DINGTALK__CLIENT_ID", ""),
+        "clientSecret": os.environ.get("NANOBOT_CHANNELS__DINGTALK__CLIENT_SECRET", ""),
+        "allowFrom": []
+    }
+
+# Feishu
+if os.environ.get("NANOBOT_CHANNELS__FEISHU__ENABLED", "").lower() == "true":
+    config["channels"]["feishu"] = {
+        "enabled": True,
+        "appId":     os.environ.get("NANOBOT_CHANNELS__FEISHU__APP_ID", ""),
+        "appSecret": os.environ.get("NANOBOT_CHANNELS__FEISHU__APP_SECRET", ""),
+        "encryptKey": os.environ.get("NANOBOT_CHANNELS__FEISHU__ENCRYPT_KEY", ""),
+        "verificationToken": os.environ.get("NANOBOT_CHANNELS__FEISHU__VERIFICATION_TOKEN", ""),
+        "allowFrom": []
+    }
+
+# Telegram
+if os.environ.get("NANOBOT_CHANNELS__TELEGRAM__ENABLED", "").lower() == "true":
+    config["channels"]["telegram"] = {
+        "enabled": True,
+        "token": os.environ.get("NANOBOT_CHANNELS__TELEGRAM__TOKEN", ""),
+        "allowFrom": []
+    }
+
+# Slack
+if os.environ.get("NANOBOT_CHANNELS__SLACK__ENABLED", "").lower() == "true":
+    config["channels"]["slack"] = {
+        "enabled": True,
+        "botToken": os.environ.get("NANOBOT_CHANNELS__SLACK__BOT_TOKEN", ""),
+        "appToken": os.environ.get("NANOBOT_CHANNELS__SLACK__APP_TOKEN", ""),
+        "allowFrom": []
+    }
+
+# Discord
+if os.environ.get("NANOBOT_CHANNELS__DISCORD__ENABLED", "").lower() == "true":
+    config["channels"]["discord"] = {
+        "enabled": True,
+        "token": os.environ.get("NANOBOT_CHANNELS__DISCORD__TOKEN", ""),
+        "allowFrom": []
+    }
+
+# QQ
+if os.environ.get("NANOBOT_CHANNELS__QQ__ENABLED", "").lower() == "true":
+    config["channels"]["qq"] = {
+        "enabled": True,
+        "appId": os.environ.get("NANOBOT_CHANNELS__QQ__APP_ID", ""),
+        "secret": os.environ.get("NANOBOT_CHANNELS__QQ__SECRET", ""),
+        "allowFrom": []
+    }
 
 config_path = Path.home() / ".nanobot" / "config.json"
 with open(config_path, "w") as f:
@@ -608,6 +655,7 @@ cmd_help() {
     printf "   ${G}logs${NC}       View logs ${D}(-f to follow)${NC}\n"
     printf "   ${G}monitor${NC}    Real-time resource dashboard\n"
     printf "   ${G}api-dash${NC}   API token & cost dashboard ${D}(-i N for interval)${NC}\n"
+    printf "   ${G}channels${NC}   Manage chat channels (interactive)\n"
     printf "   ${G}help${NC}       This message\n"
 
     printf "\n ${BOLD}Options${NC}\n\n"
@@ -619,10 +667,12 @@ cmd_help() {
     printf "   ${D}\$${NC} git clone <repo> && cd nanobot\n"
     printf "   ${D}\$${NC} cp .env.example .env && nano .env    ${D}# fill in credentials${NC}\n"
     printf "   ${D}\$${NC} ./deploy.sh init                     ${D}# install deps${NC}\n"
-    printf "   ${D}\$${NC} ./deploy.sh                          ${D}# deploy & start${NC}\n"
+    printf "   ${D}\$${NC} ./deploy.sh channels                 ${D}# configure channels${NC}\n"
+    printf "   ${D}\$${NC} ./deploy.sh                          ${D}# deplo{NC}\n"
 
     printf "\n ${BOLD}Examples${NC}\n\n"
     printf "   ${D}\$${NC} ./deploy.sh              ${D}# one-command deploy${NC}\n"
+    printf "   ${D}\$${NC} ./deploy.sh channels     ${D}# manage channels interactively${NC}\n"
     printf "   ${D}\$${NC} ./deploy.sh logs -f       ${D}# follow logs${NC}\n"
     printf "   ${D}\$${NC} ./deploy.sh status         ${D}# view dashboard${NC}\n"
     printf "\n"
@@ -645,6 +695,14 @@ cmd_api_dash() {
         fail "No virtual environment — run: ./deploy.sh init"; return 1
     fi
     exec python3 "$script" "$@"
+}
+
+cmd_channels() {
+    local script="$PROJECT_DIR/channel_manager.py"
+    if [[ ! -f "$script" ]]; then
+        fail "channel_manager.py not found"; return 1
+    fi
+    python3 "$script" "$@"
 }
 
 # ── Parse Args ────────────────────────────────────────────────
@@ -670,6 +728,7 @@ case "$COMMAND" in
     logs)           cmd_logs ;;
     monitor)        cmd_monitor ;;
     api-dash)       cmd_api_dash "$@" ;;
+    channels)       cmd_channels "$@" ;;
     help|--help|-h) cmd_help ;;
     *)              fail "Unknown command: $COMMAND"; cmd_help; exit 1 ;;
 esac

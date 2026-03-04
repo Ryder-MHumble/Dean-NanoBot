@@ -36,6 +36,7 @@ MSG_TYPE_MAP = {
     "audio": "[audio]",
     "file": "[file]",
     "sticker": "[sticker]",
+    "post": "[post]",  # Rich text message
 }
 
 
@@ -282,11 +283,53 @@ class FeishuChannel(BaseChannel):
             await self._add_reaction(message_id, "THUMBSUP")
             
             # Parse message content
+            logger.debug(f"Feishu message type: {msg_type}, raw content: {message.content[:200] if message.content else 'None'}")
+
             if msg_type == "text":
                 try:
                     content = json.loads(message.content).get("text", "")
                 except json.JSONDecodeError:
                     content = message.content or ""
+            elif msg_type == "post":
+                # Handle rich text (post) messages
+                try:
+                    post_data = json.loads(message.content)
+                    logger.debug(f"Post data structure: {json.dumps(post_data, ensure_ascii=False)[:500]}")
+
+                    # Extract text from post content
+                    # Post format can be:
+                    # 1. {"zh_cn": {"title": "...", "content": [[{"tag": "text", "text": "..."}]]}}
+                    # 2. {"title": "...", "content": [[{"tag": "text", "text": "..."}]]}
+                    content_parts = []
+
+                    # Try language-specific format first
+                    post_content = None
+                    for lang_key in ["zh_cn", "en_us", "ja_jp"]:
+                        if lang_key in post_data:
+                            post_content = post_data[lang_key]
+                            break
+
+                    # If no language key, use post_data directly
+                    if not post_content:
+                        post_content = post_data
+
+                    # Add title if present
+                    if "title" in post_content and post_content["title"]:
+                        content_parts.append(post_content["title"])
+
+                    # Extract text from content array
+                    if "content" in post_content:
+                        for paragraph in post_content["content"]:
+                            if isinstance(paragraph, list):
+                                for element in paragraph:
+                                    if isinstance(element, dict) and element.get("tag") == "text" and "text" in element:
+                                        content_parts.append(element["text"])
+
+                    content = "\n".join(content_parts) if content_parts else "[post]"
+                    logger.info(f"Extracted post content: {content[:200]}")
+                except (json.JSONDecodeError, KeyError, TypeError) as e:
+                    logger.warning(f"Failed to parse post message: {e}, raw: {message.content[:200]}")
+                    content = "[post]"
             else:
                 content = MSG_TYPE_MAP.get(msg_type, f"[{msg_type}]")
             

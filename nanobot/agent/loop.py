@@ -51,6 +51,8 @@ class AgentLoop:
     ):
         from nanobot.config.schema import ExecToolConfig
         from nanobot.cron.service import CronService
+        from nanobot.callback_server import CallbackServer
+
         self.bus = bus
         self.provider = provider
         self.workspace = workspace
@@ -62,7 +64,7 @@ class AgentLoop:
         self.restrict_to_workspace = restrict_to_workspace
         self._mcp_configs = mcp_configs or []
         self._mcp_clients: list = []
-        
+
         self.context = ContextBuilder(workspace)
         self.sessions = session_manager or SessionManager(workspace)
         self.tools = ToolRegistry()
@@ -75,9 +77,13 @@ class AgentLoop:
             exec_config=self.exec_config,
             restrict_to_workspace=restrict_to_workspace,
         )
-        
+
+        # Initialize callback server for Realm integration
+        self.callback_server = CallbackServer(bus)
+
         self._running = False
         self._register_default_tools()
+        self._setup_realm_integration()
     
     def _register_default_tools(self) -> None:
         """Register the default set of tools."""
@@ -115,6 +121,17 @@ class AgentLoop:
         from nanobot.agent.tools.screenshot import ScreenshotTool
         self.tools.register(ScreenshotTool(workspace=self.workspace))
 
+        # Realm tool (for project task dispatch)
+        from nanobot.agent.tools.realm import RealmTool
+        self.realm_tool = RealmTool(callback_server=self.callback_server)
+        self.tools.register(self.realm_tool)
+
+    def _setup_realm_integration(self) -> None:
+        """Setup Realm tool integration (deprecated - now using tool-based approach)."""
+        # This method is kept for backward compatibility but no longer needed
+        # Realm integration is now handled via the RealmTool
+        pass
+
     async def _start_mcp_tools(self) -> None:
         """Start all configured MCP servers and register their tools."""
         from nanobot.agent.tools.mcp_client import MCPClient, MCPToolWrapper
@@ -137,6 +154,9 @@ class AgentLoop:
         logger.info("Agent loop started")
 
         await self._start_mcp_tools()
+
+        # Start callback server for Realm integration
+        await self.callback_server.start()
 
         try:
             while self._running:
@@ -163,6 +183,9 @@ class AgentLoop:
                 except asyncio.TimeoutError:
                     continue
         finally:
+            # Stop callback server
+            await self.callback_server.stop()
+
             for client in self._mcp_clients:
                 try:
                     await client.stop()
@@ -177,10 +200,10 @@ class AgentLoop:
     async def _process_message(self, msg: InboundMessage) -> OutboundMessage | None:
         """
         Process a single inbound message.
-        
+
         Args:
             msg: The inbound message to process.
-        
+
         Returns:
             The response message, or None if no response needed.
         """
@@ -188,7 +211,7 @@ class AgentLoop:
         # The chat_id contains the original "channel:chat_id" to route back to
         if msg.channel == "system":
             return await self._process_system_message(msg)
-        
+
         preview = msg.content[:80] + "..." if len(msg.content) > 80 else msg.content
         logger.info(f"Processing message from {msg.channel}:{msg.sender_id}: {preview}")
         
@@ -207,6 +230,11 @@ class AgentLoop:
         cron_tool = self.tools.get("cron")
         if isinstance(cron_tool, CronTool):
             cron_tool.set_context(msg.channel, msg.chat_id)
+
+        # Update Realm tool context
+        realm_tool = self.tools.get("realm")
+        if realm_tool and hasattr(realm_tool, 'set_context'):
+            realm_tool.set_context(msg.channel, msg.chat_id)
 
         # Bind sender to usage context so every LLM call in this turn is attributed
         _usage.set_context(msg.sender_id, msg.channel)

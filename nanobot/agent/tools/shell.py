@@ -31,6 +31,8 @@ class ExecTool(Tool):
             r">\s*/dev/sd",                  # write to disk
             r"\b(shutdown|reboot|poweroff)\b",  # system power
             r":\(\)\s*\{.*\};\s*:",          # fork bomb
+            r"localhost:4003",               # Realm API - use realm tool instead
+            r"http://.*:4003",               # Realm API - use realm tool instead
         ]
         self.allow_patterns = allow_patterns or []
         self.restrict_to_workspace = restrict_to_workspace
@@ -112,6 +114,17 @@ class ExecTool(Tool):
         """Best-effort safety guard for potentially destructive commands."""
         cmd = command.strip()
         lower = cmd.lower()
+
+        # Special check for Realm API calls
+        if "localhost:4003" in lower or ":4003" in lower:
+            return (
+                "❌ Error: Direct access to Realm API (localhost:4003) is not allowed.\n\n"
+                "You MUST use the 'realm' tool instead:\n"
+                "- List projects: realm(action=\"list\")\n"
+                "- Dispatch task: realm(action=\"dispatch\", message=\"...\")\n"
+                "- Create project: realm(action=\"create\", project_name=\"...\", project_path=\"...\")\n\n"
+                "Why? Using exec/curl bypasses callback registration, so results won't be sent back to the user."
+            )
 
         for pattern in self.deny_patterns:
             if re.search(pattern, lower):
