@@ -1,7 +1,7 @@
 {
   "data_source": "supabase",
   "supabase": {
-    "url": "https://dfpijqpgsupvdmidztup.supabase.co",
+    "url": "${SUPABASE_URL}",
     "key": "${SUPABASE_KEY}"
   },
   "mediacrawler_path": "/Users/sunminghao/Desktop/MediaCrawler",

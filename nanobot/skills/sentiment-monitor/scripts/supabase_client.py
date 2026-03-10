@@ -38,7 +38,7 @@ class SentimentSupabaseClient:
         Returns:
             内容列表
         """
-        query = self.client.table("contents").select("*")
+        query = self.client.table("sentiment_contents").select("*")
 
         if platform:
             query = query.eq("platform", platform)
@@ -67,7 +67,7 @@ class SentimentSupabaseClient:
             内容列表
         """
         # 由于publish_time字段可能是秒级或毫秒级时间戳，我们需要查询所有数据然后手动过滤
-        query = self.client.table("contents").select("*")
+        query = self.client.table("sentiment_contents").select("*")
 
         if platform:
             query = query.eq("platform", platform)
@@ -106,7 +106,7 @@ class SentimentSupabaseClient:
         start_ts = int(datetime.combine(start_date, datetime.min.time()).timestamp())
         end_ts = int(datetime.combine(end_date, datetime.max.time()).timestamp())
 
-        query = self.client.table("contents")\
+        query = self.client.table("sentiment_contents")\
             .select("*")\
             .gte("publish_time", start_ts)\
             .lte("publish_time", end_ts)
@@ -128,7 +128,7 @@ class SentimentSupabaseClient:
         limit: int = 100
     ) -> List[Dict]:
         """查询包含特定关键词的内容"""
-        query = self.client.table("contents")\
+        query = self.client.table("sentiment_contents")\
             .select("*")\
             .eq("source_keyword", keyword)\
             .order("publish_time", desc=True)\
@@ -161,7 +161,7 @@ class SentimentSupabaseClient:
             return {}
 
         try:
-            response = self.client.table("comments")\
+            response = self.client.table("sentiment_comments")\
                 .select("*")\
                 .in_("content_id", content_ids)\
                 .execute()
@@ -280,7 +280,7 @@ class SentimentSupabaseClient:
         Returns:
             内容列表
         """
-        query = self.client.table("contents").select("*").like("source_keyword", "@%")
+        query = self.client.table("sentiment_contents").select("*").like("source_keyword", "@%")
 
         if platform:
             query = query.eq("platform", platform)
@@ -303,7 +303,7 @@ class SentimentSupabaseClient:
         Returns:
             内容列表
         """
-        query = self.client.table("contents").select("*").not_.like("source_keyword", "@%")
+        query = self.client.table("sentiment_contents").select("*").not_.like("source_keyword", "@%")
 
         if platform:
             query = query.eq("platform", platform)
@@ -370,7 +370,7 @@ if __name__ == "__main__":
     import os
     config = {
         "supabase": {
-            "url": os.environ.get("SUPABASE_URL", "https://dfpijqpgsupvdmidztup.supabase.co"),
+            "url": os.environ.get("SUPABASE_URL", ""),
             "key": os.environ.get("SUPABASE_KEY", "")
         }
     }
