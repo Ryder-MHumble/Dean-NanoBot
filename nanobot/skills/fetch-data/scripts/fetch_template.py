@@ -24,7 +24,14 @@ API_ENDPOINT = "/api/v1/sources/catalog"  # 替换为目标 API 路径
 # /api/v1/sources/catalog             信源目录（分页+分面）
 # /api/v1/sources/facets              信源分面
 # /api/v1/intel/policy/feed           政策动态
+# /api/v1/intel/policy/opportunities  政策机会
 # /api/v1/intel/personnel/feed        人事动态
+# /api/v1/intel/personnel/changes     结构化任免
+# /api/v1/intel/personnel/enriched-feed LLM 富化人事
+# /api/v1/intel/tech-frontier/topics  科技前沿主题
+# /api/v1/intel/tech-frontier/signals 科技前沿信号
+# /api/v1/intel/tech-frontier/opportunities 科技前沿机会
+# /api/v1/intel/university/feed       高校动态
 # /api/v1/scholars                    学者列表
 # /api/v1/students                    学生列表
 # /api/v1/leadership                  高校领导列表
@@ -200,6 +207,77 @@ def _display_personnel(data):
         print("\n... 请调整 offset 获取更多")
 
 
+def _display_generic_items(data, title, fields):
+    items = data.get("items", [])
+    total = data.get(
+        "filtered_sources",
+        data.get("item_count", data.get("total_count", data.get("total", len(items)))),
+    )
+    show = items if total <= 20 else items[:10]
+    print(f"共 {total} 条{title}（{'全部展示' if total <= 20 else '展示前10条'}）")
+    for i, item in enumerate(show, 1):
+        values = [f"{k}:{item.get(k, '')}" for k in fields if item.get(k) not in (None, "")]
+        print(f"\n[{i}] " + " | ".join(values[:6]))
+    if total > 20:
+        print("\n... 请调整分页参数获取更多")
+
+
+def _display_policy_opportunities(data):
+    _display_generic_items(
+        data,
+        "政策机会",
+        ["date", "title", "name", "source", "status", "matchScore", "funding", "sourceUrl"],
+    )
+
+
+def _display_personnel_changes(data):
+    _display_generic_items(
+        data,
+        "人事任免",
+        ["date", "name", "action", "position", "department", "source"],
+    )
+
+
+def _display_personnel_enriched(data):
+    _display_generic_items(
+        data,
+        "富化人事动态",
+        ["date", "title", "source", "importance", "relevance", "group", "actionSuggestion"],
+    )
+
+
+def _display_tech_topics(data):
+    _display_generic_items(
+        data,
+        "科技前沿主题",
+        ["id", "topic", "heat_trend", "our_status"],
+    )
+
+
+def _display_tech_signals(data):
+    _display_generic_items(
+        data,
+        "科技前沿信号",
+        ["topic_id", "signal_type", "title", "source", "published_at", "sourceUrl"],
+    )
+
+
+def _display_tech_opportunities(data):
+    _display_generic_items(
+        data,
+        "科技前沿机会",
+        ["title", "priority", "type", "summary", "source", "sourceUrl"],
+    )
+
+
+def _display_university_feed(data):
+    _display_generic_items(
+        data,
+        "高校动态",
+        ["published_at", "title", "source_name", "group", "url"],
+    )
+
+
 def _display_scholars(data):
     items = data.get("items", [])
     total = data.get("total", len(items))
@@ -287,7 +365,14 @@ DISPLAY_MAP = {
     "/api/v1/sources/catalog": _display_sources_catalog,
     "/api/v1/sources/facets": _display_source_facets,
     "/api/v1/intel/policy/feed": _display_policy,
+    "/api/v1/intel/policy/opportunities": _display_policy_opportunities,
     "/api/v1/intel/personnel/feed": _display_personnel,
+    "/api/v1/intel/personnel/changes": _display_personnel_changes,
+    "/api/v1/intel/personnel/enriched-feed": _display_personnel_enriched,
+    "/api/v1/intel/tech-frontier/topics": _display_tech_topics,
+    "/api/v1/intel/tech-frontier/signals": _display_tech_signals,
+    "/api/v1/intel/tech-frontier/opportunities": _display_tech_opportunities,
+    "/api/v1/intel/university/feed": _display_university_feed,
     "/api/v1/scholars": _display_scholars,
     "/api/v1/students": _display_students,
     "/api/v1/leadership": _display_leadership,

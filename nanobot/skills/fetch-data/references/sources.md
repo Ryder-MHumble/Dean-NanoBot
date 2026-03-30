@@ -1,65 +1,57 @@
-# 信源查询（2026 实时版）
+# 信源查询与控制（代码对齐）
 
-基址：`http://10.1.132.21:8001`
+后端地址：`http://10.1.132.21:8001`
+后端项目：`/home/ubuntu/workspace/DeanAgent-Backend`
 
-## 推荐接口
+## 首选接口
 
-1. 首选：`GET /api/v1/sources/catalog`
-- 用于全量检索、分页和分面统计。
+- `GET /api/v1/sources/catalog`：目录检索（分页 + 分面）
+- `GET /api/v1/sources/facets`：分面候选值
+- `GET /api/v1/sources`：兼容列表（数组）
 
-2. 分面：`GET /api/v1/sources/facets`
-- 用于拿维度/分组/标签候选值。
+## 常见场景
 
-3. 兼容：`GET /api/v1/sources`
-- 返回数组，适合简单列表场景。
-
-## 常用调用
-
-### 1) 全量信源目录 + 分面
+### 全量目录 + 分面
 
 ```bash
 curl "http://10.1.132.21:8001/api/v1/sources/catalog?include_facets=true&page_size=200"
 ```
 
-### 2) 高校领导信源
+### 高校领导相关信源
 
 ```bash
 curl "http://10.1.132.21:8001/api/v1/sources/catalog?tag=leadership"
 ```
 
-### 3) 学者师资信源
+### 学者信源
 
 ```bash
 curl "http://10.1.132.21:8001/api/v1/sources/catalog?dimension=scholars"
 ```
 
-### 4) 只看异常信源
+### 异常信源
 
 ```bash
 curl "http://10.1.132.21:8001/api/v1/sources/catalog?health_status=failing"
 ```
 
-### 5) 看筛选候选值
+### 某信源日志
 
 ```bash
-curl "http://10.1.132.21:8001/api/v1/sources/facets"
+curl "http://10.1.132.21:8001/api/v1/sources/<source_id>/logs?limit=20"
 ```
 
-## 与 policy/personnel 联动
+## 与业务接口联动
 
-当用户要“只看某来源政策/人事”时，先用 `sources/catalog` 找 `source_id` 或确认 `source_name`，再调用：
+当用户要“只看某来源政策/人事/前沿信号”时，先用 `sources/catalog` 确定 `source_id`，再带入：
 
 - `/api/v1/intel/policy/feed`
 - `/api/v1/intel/personnel/feed`
+- `/api/v1/intel/personnel/enriched-feed`
+- `/api/v1/intel/tech-frontier/signals`
 
-可用参数：
+可用来源参数：
 - `source_id`
 - `source_ids`
 - `source_name`
 - `source_names`
-
-## 推荐调用顺序
-
-1. 用户提到来源但不确定：先 `sources/catalog`。
-2. 确认来源后：再调业务接口（policy/personnel/scholars/students）。
-3. 结果过大时：按接口分页规则翻页。
