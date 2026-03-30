@@ -72,7 +72,7 @@ The agent will receive the message and should:
 
 ## Error Handling
 
-1. **API unreachable** (`http://43.98.254.243:8001`): script exits with code 1, check server connectivity
+1. **API unreachable** (`http://10.1.132.21:8001/`): script exits with code 1, check server connectivity
 2. **Empty or malformed response**: script reports specific parsing error
 3. **`requests` not installed**: run `pip3 install -r requirements.txt`
 

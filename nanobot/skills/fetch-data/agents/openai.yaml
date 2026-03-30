@@ -1,0 +1,4 @@
+interface:
+  display_name: "OpenClaw Fetch Data"
+  short_description: "Fetch backend data without local scripts"
+  default_prompt: "Map user intent to OpenClaw /api/v1 endpoints (prefer /sources/catalog and /sources/facets for source discovery), execute one-shot API requests directly (python heredoc or curl) without saving script files, then return structured results and pagination hints."

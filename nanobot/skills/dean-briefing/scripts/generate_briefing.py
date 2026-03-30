@@ -5,7 +5,7 @@
 从后台服务获取每日情报简报数据，解析结构化JSON并格式化为
 钉钉Markdown消息，供 nanobot agent 进行二次LLM润色后推送。
 
-API: http://43.98.254.243:8001/api/v1/intel/daily-briefing/report
+API: http://10.1.132.21:8001//api/v1/intel/daily-briefing/report
 """
 
 import json
@@ -20,7 +20,7 @@ except ImportError:
     print("   请运行: pip3 install requests", file=sys.stderr)
     sys.exit(1)
 
-API_URL = "http://43.98.254.243:8001/api/v1/intel/daily-briefing/report"
+API_URL = "http://10.1.132.21:8001//api/v1/intel/daily-briefing/report"
 
 # Module ID to Chinese name mapping
 MODULE_NAMES = {
