@@ -10,8 +10,10 @@ Sentiment Monitoring Script - Dual Dimension
 import json
 import os
 import sys
+import argparse
+from datetime import datetime, date
 from pathlib import Path
-from typing import Dict, List, Any, Tuple
+from typing import Dict, List, Any, Tuple, Optional
 
 # 加载 .env 文件（从项目根目录向上查找）
 try:
@@ -44,7 +46,62 @@ def load_config() -> Dict[str, Any]:
     return json.loads(expanded)
 
 
-def load_official_data(config: Dict) -> Tuple[List[Dict], Dict[str, List[Dict]]]:
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Run dual-dimension sentiment monitoring")
+    parser.add_argument(
+        "--mode",
+        default="standard",
+        choices=["standard", "fast"],
+        help="Report generation mode. Default: standard",
+    )
+    parser.add_argument(
+        "--date",
+        dest="target_date",
+        default=None,
+        help="Optional target date in YYYY-MM-DD. If omitted, use all available data.",
+    )
+    return parser.parse_args()
+
+
+def parse_target_date(date_text: Optional[str]) -> Optional[date]:
+    if not date_text:
+        return None
+    try:
+        return datetime.strptime(date_text, "%Y-%m-%d").date()
+    except ValueError as exc:
+        raise ValueError(f"Invalid --date value: {date_text}, expected YYYY-MM-DD") from exc
+
+
+def _extract_publish_date(item: Dict[str, Any]) -> Optional[date]:
+    publish_time = item.get("publish_time")
+    if publish_time is None:
+        return None
+
+    try:
+        ts = float(publish_time)
+    except (TypeError, ValueError):
+        return None
+
+    # Support second-level and millisecond-level timestamps.
+    if ts > 10_000_000_000:
+        ts /= 1000
+
+    try:
+        return datetime.fromtimestamp(ts).date()
+    except (OverflowError, OSError, ValueError):
+        return None
+
+
+def _filter_items_by_date(items: List[Dict[str, Any]], target_date: Optional[date], label: str) -> List[Dict[str, Any]]:
+    if target_date is None:
+        return items
+
+    filtered = [item for item in items if _extract_publish_date(item) == target_date]
+    print(f"✅ Date filter ({target_date}) applied to {label}: {len(filtered)}/{len(items)} kept")
+    return filtered
+
+
+def load_official_data(config: Dict, target_date: Optional[date] = None) -> Tuple[List[Dict], Dict[str, List[Dict]]]:
     """
     加载官方账号数据（source_keyword LIKE '@%'）及其评论。
 
@@ -57,6 +114,7 @@ def load_official_data(config: Dict) -> Tuple[List[Dict], Dict[str, List[Dict]]]
     supabase_client = SentimentSupabaseClient(config)
 
     account_items = supabase_client.get_official_account_contents()
+    account_items = _filter_items_by_date(account_items, target_date, "official account posts")
     print(f"✅ Loaded {len(account_items)} official account posts")
 
     if not account_items:
@@ -70,7 +128,7 @@ def load_official_data(config: Dict) -> Tuple[List[Dict], Dict[str, List[Dict]]]
     return account_items, comments_data
 
 
-def load_keyword_data(config: Dict) -> Tuple[Dict[str, List[Dict]], Dict[str, List[Dict]]]:
+def load_keyword_data(config: Dict, target_date: Optional[date] = None) -> Tuple[Dict[str, List[Dict]], Dict[str, List[Dict]]]:
     """
     加载关键词搜索数据（source_keyword NOT LIKE '@%'）及其评论。
 
@@ -85,6 +143,7 @@ def load_keyword_data(config: Dict) -> Tuple[Dict[str, List[Dict]], Dict[str, Li
     all_data = {}
     for platform in config["platforms"]:
         raw_items = supabase_client.get_keyword_search_contents(platform)
+        raw_items = _filter_items_by_date(raw_items, target_date, f"{platform} keyword posts")
         converted = supabase_client.convert_to_legacy_format(raw_items, platform)
         all_data[platform] = converted
 
@@ -112,6 +171,13 @@ def load_keyword_data(config: Dict) -> Tuple[Dict[str, List[Dict]], Dict[str, Li
 
 def main():
     """Main execution function."""
+    args = parse_args()
+    try:
+        target_date_obj = parse_target_date(args.target_date)
+    except ValueError as e:
+        print(f"❌ {e}", file=sys.stderr)
+        sys.exit(2)
+
     print("=" * 70)
     print("🤖 Sentiment Monitoring System - Dual Dimension v3.0")
     print("=" * 70)
@@ -125,6 +191,11 @@ def main():
 
     print(f"🔍 Keywords: {', '.join(config['keywords'])}")
     print(f"📱 Platforms: {', '.join(config['platforms'])}")
+    print(f"🧩 Report mode: {args.mode}")
+    if target_date_obj:
+        print(f"📅 Date filter: {target_date_obj}")
+    else:
+        print("📅 Date filter: all available data")
 
     account_analysis = None
     fullvolume_analysis = None
@@ -135,7 +206,7 @@ def main():
     print("=" * 70)
 
     try:
-        account_items_raw, account_comments = load_official_data(config)
+        account_items_raw, account_comments = load_official_data(config, target_date_obj)
         if account_items_raw:
             print("\n🔄 Analyzing official account data...")
             account_analysis = analyze_account_data(account_items_raw, account_comments, config)
@@ -154,7 +225,7 @@ def main():
     print("=" * 70)
 
     try:
-        keyword_data, keyword_comments = load_keyword_data(config)
+        keyword_data, keyword_comments = load_keyword_data(config, target_date_obj)
         total_keyword_items = sum(len(d) for d in keyword_data.values())
 
         if total_keyword_items > 0:
@@ -191,19 +262,25 @@ def main():
         print("🔄 Generating dual-dimension report...")
         combined_analysis = {
             "metadata": {
-                "analysis_date": __import__("datetime").datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                "data_date": "全量数据"
+                "analysis_date": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                "data_date": args.target_date or "全量数据",
+                "mode": args.mode,
             }
         }
         if account_analysis is not None:
             combined_analysis["account_analysis"] = account_analysis
         if fullvolume_analysis is not None:
             combined_analysis["fullvolume_analysis"] = fullvolume_analysis
-            combined_analysis["metadata"]["data_date"] = fullvolume_analysis.get(
-                "metadata", {}
-            ).get("data_date", "全量数据")
+            if not args.target_date:
+                combined_analysis["metadata"]["data_date"] = fullvolume_analysis.get(
+                    "metadata", {}
+                ).get("data_date", "全量数据")
 
-        report = generate_report(combined_analysis)
+        try:
+            report = generate_report(combined_analysis, mode=args.mode)
+        except TypeError:
+            # Legacy generator compatibility
+            report = generate_report(combined_analysis)
         print("✅ Report generated successfully")
     except Exception as e:
         print(f"❌ Error generating report: {e}", file=sys.stderr)

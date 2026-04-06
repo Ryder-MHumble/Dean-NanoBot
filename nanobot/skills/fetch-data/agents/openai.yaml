@@ -1,4 +1,0 @@
-interface:
-  display_name: "OpenClaw Fetch Data"
-  short_description: "Fetch backend data without local scripts"
-  default_prompt: "Map user intent to DeanAgent-Backend /api/v1 endpoints (authoritative code under /home/ubuntu/workspace/DeanAgent-Backend/app/api/v1). For fuzzy queries, first infer intents, auto-fill likely params, and orchestrate multi-endpoint calls when needed. Prefer internal APIs over web_search; for source discovery use /sources/catalog and /sources/facets; execute one-shot API requests directly (python heredoc or curl) without saving script files, then return structured, merged results with pagination hints and assumptions."

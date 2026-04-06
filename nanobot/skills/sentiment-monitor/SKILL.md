@@ -1,6 +1,6 @@
 ---
 name: sentiment-monitor
-description: Daily sentiment monitoring / 每日舆情监控. Generates a dual-dimension report from Supabase data: (1) Official account operations analysis — account post performance, comment themes, competitor account comparison; (2) Full-network sentiment insights — real risks with response plans, positive opportunities, immediately executable action checklist. Use when (1) setting up daily monitoring (2) generating sentiment report (3) analyzing social media data (4) running sentiment monitoring
+description: Daily sentiment monitoring / 每日舆情监控. Generates a dual-dimension report from Supabase data: (1) Official account operations analysis — account post performance, comment themes, competitor account comparison; (2) Full-network sentiment insights — real risks with response plans, positive opportunities, immediately executable action checklist. Deliver the final report directly, with priority labels and source links for surfaced intel, instead of saving local markdown files. Use when (1) setting up daily monitoring (2) generating sentiment report (3) analyzing social media data (4) running sentiment monitoring
 metadata: {"nanobot":{"emoji":"📊","requires":{"bins":["python3"]}}}
 ---
 # Sentiment Monitor
@@ -25,6 +25,15 @@ Two-dimension analysis from Supabase data:
 - Positive opportunities to amplify
 - Immediately executable action checklist (3-5 items)
 
+## Execution Mode（质量/成本/速度）
+
+- `Standard`（默认）：
+  - 默认输出更丰富，保留更多风险/机会上下文和执行建议。
+  - 结果控制：高风险最多 4 条，中风险最多 3 条，机会最多 8 条。
+- `Fast`（按需）：
+  - 仅在用户明确要求“更快/更短”时启用。
+  - 结果控制：高风险最多 3 条，中风险最多 2 条，机会最多 5 条。
+
 ## When to Use
 
 Use this skill when the user asks:
@@ -46,13 +55,19 @@ cron(action="add", message="Run sentiment monitoring: analyze social media data 
 ### Generate report manually for today:
 
 ```bash
-cd /Users/sunminghao/Desktop/nanobot/nanobot/skills/sentiment-monitor/scripts && python3 run_monitor.py
+python3 nanobot/skills/sentiment-monitor/scripts/run_monitor.py --mode standard
 ```
 
 ### Generate report for specific date:
 
 ```bash
-cd /Users/sunminghao/Desktop/nanobot/nanobot/skills/sentiment-monitor/scripts && python3 run_monitor.py --date 2026-02-12
+python3 nanobot/skills/sentiment-monitor/scripts/run_monitor.py --date 2026-02-12 --mode standard
+```
+
+### Need faster concise output:
+
+```bash
+python3 nanobot/skills/sentiment-monitor/scripts/run_monitor.py --mode fast
 ```
 
 ## Workflow
@@ -64,17 +79,27 @@ When executing sentiment monitoring, follow these steps:
 Execute the monitoring script to load data from Supabase and generate report:
 
 ```bash
-cd /Users/sunminghao/Desktop/nanobot/nanobot/skills/sentiment-monitor/scripts && python3 run_monitor.py
+python3 nanobot/skills/sentiment-monitor/scripts/run_monitor.py --mode standard
 ```
 
 The script will:
 
-- Load all data from Supabase (posts and comments)
+- Load data from Supabase (all data by default, or one day when `--date` is provided)
 - Perform sentiment analysis
-- Generate professional report
+- Generate report in `standard` or `fast` mode
 - Output report to stdout
 
 ### 2. Send Report
+
+Before final delivery, align the output with `references/report-template.md`. Surface items with clear priority labels and source links. Then send or reply directly; do not save the report as a local `.md` file unless the user explicitly asks for export.
+
+Run quality gate validation before sending:
+
+```bash
+python3 nanobot/skills/sentiment-monitor/scripts/validate_intel_report.py --max-chars 8000 --file - <<< "$report_content"
+```
+
+If validation fails, revise the report first.
 
 Use the message tool to send the generated report to the user:
 
@@ -131,7 +156,7 @@ Core sentiment analysis engine (imported by run_monitor.py).
 - KOL identification (high-follower accounts)
 - Engagement metrics aggregation
 
-### generate_report.py
+### generate_report_v2.py
 
 Report formatting module (imported by run_monitor.py).
 
@@ -152,7 +177,7 @@ The generated report has two clearly separated dimensions:
 ### 维度一：官方账号运营分析
 
 1. **账号概览** — 各账号帖子数/总互动/平均互动/正面占比
-2. **高互动帖子** — TOP 3 帖子，含互动分解和原文链接
+2. **高互动帖子** — TOP 3 帖子，含互动分解、优先级、原文链接
 3. **评论主题洞察** — 高频关键词 + 代表性评论原文
 4. **竞品账号对比** — 横向对比表 + 差距/优势洞察
 5. **内容运营建议** — 两部分：① 本周选题建议（交叉引用全网热点/竞品高互动帖/自身爆款/用户正面评论主题，每条注明数据来源）；② 执行层面（回应负面评论、提升低互动账号、追赶竞品）
@@ -161,7 +186,7 @@ The generated report has two clearly separated dimensions:
 
 1. **声量总览** — 简表（帖子数/评论数/互动量/情感分布/平台分布）
 2. **关键风险** — 仅高/中优先级，每条附原文链接 + 具体回应方案
-3. **正向机会** — 可转发/借势的高互动正面内容，每条附操作建议
+3. **正向机会** — 可转发/借势的高互动正面内容，每条附优先级、原文链接、操作建议
 4. **立即执行清单** — 3-5 条带优先级的具体行动 checkbox
 
 ## Configuration
@@ -243,6 +268,10 @@ The agent will receive the message "Run sentiment monitoring: analyze social med
 
    - Report will show "No mentions found"
    - This is normal if keywords have no recent activity
+4. **Quality gate failed**:
+
+   - Re-check `references/quality-gate.md`
+   - Keep only highest-priority items and补齐缺失链接后再发送
 
 ## Examples
 
@@ -252,9 +281,9 @@ User: "生成今天的舆情报告"
 
 Agent:
 
-1. Execute: `cd /Users/sunminghao/Desktop/nanobot/nanobot/skills/sentiment-monitor/scripts && python3 run_monitor.py`
+1. Execute: `python3 nanobot/skills/sentiment-monitor/scripts/run_monitor.py`
 2. Capture output (markdown report)
-3. Send via message tool
+3. Send via message tool or reply directly in chat; do not create local report files
 
 ### Example 2: Set up automated monitoring
 
@@ -273,8 +302,8 @@ User: "分析最近的舆情数据"
 
 Agent:
 
-1. Execute: `cd /Users/sunminghao/Desktop/nanobot/nanobot/skills/sentiment-monitor/scripts && python3 run_monitor.py`
-2. Capture report
+1. Execute: `python3 nanobot/skills/sentiment-monitor/scripts/run_monitor.py`
+2. Capture report and run validator
 3. Send via message tool
 
 ## Advanced Topics
@@ -301,3 +330,4 @@ For detailed information, see:
 
 - `references/report-template.md` - Complete report template with examples
 - `references/sentiment-guidelines.md` - Sentiment analysis best practices
+- `references/quality-gate.md` - Final delivery quality gate

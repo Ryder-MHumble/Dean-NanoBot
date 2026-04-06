@@ -1,6 +1,6 @@
 ---
 name: dean-briefing
-description: 每日院长AI早报推送 / Dean's AI Daily Briefing. Fetches structured intelligence data from backend API and delivers a professional DingTalk report covering policy, tech trends, university news, talent dynamics, and events. Use when (1) setting up daily 9AM briefing (2) generating today's briefing manually (3) running the dean's briefing
+description: 每日院长AI早报推送 / Dean's AI Daily Briefing. Fetches structured intelligence data from backend API and delivers a professional DingTalk report covering policy, tech trends, university news, talent dynamics, and events. Preserve backend-provided link order as the priority order, and return the final report directly instead of saving local markdown files. Use when (1) setting up daily 9AM briefing (2) generating today's briefing manually (3) running the dean's briefing
 metadata: {"nanobot":{"emoji":"🧠","requires":{"bins":["python3"]}}}
 ---
 
@@ -19,6 +19,11 @@ This skill fetches structured intelligence data from a backend service and deliv
 - **人事动态** (Talent Radar): Personnel changes, talent policies
 - **智能日程** (Smart Schedule): Upcoming AI conferences and events
 
+## Execution Mode（质量/成本/速度）
+
+- `Standard`（默认）：保持后端段落事实与顺序不变，做极轻量可读性修正（仅标点/断句）。
+- `Fast`（按需）：仅在用户明确要求“更快发送”时启用，保持后端段落原样直接发送。
+
 ## When to Use
 
 Use this skill when the user asks:
@@ -33,7 +38,7 @@ Use this skill when the user asks:
 ### 1. Run the script
 
 ```bash
-cd /Users/sunminghao/Desktop/nanobot/nanobot/skills/dean-briefing/scripts && python3 generate_briefing.py
+python3 nanobot/skills/dean-briefing/scripts/generate_briefing.py
 ```
 
 The script fetches the API, renders all paragraphs with embedded links, and outputs the final DingTalk Markdown report to stdout.
@@ -46,11 +51,23 @@ Take everything between `GENERATED BRIEFING` and the final `====` separator. Tha
 
 The only acceptable touch-up: if a sentence is missing a closing period, add one.
 
+Keep the paragraph order exactly as returned by the backend. Treat that order as the final priority order.
+
 ### 3. Send the report
 
 ```python
 message(content=report, channel="dingtalk", chat_id=chat_id)
 ```
+
+If the user is asking in the current conversation rather than a push channel, paste the report directly in the reply. Do not save it to a local `.md` file unless the user explicitly asks for export.
+
+Run quality gate validation before sending:
+
+```bash
+python3 nanobot/skills/dean-briefing/scripts/validate_intel_report.py --require-priority false --max-chars 6000 --file - <<< "$report_content"
+```
+
+If validation fails, revise the report first.
 
 ## Cron Integration
 
@@ -75,6 +92,7 @@ The agent will receive the message and should:
 1. **API unreachable** (`http://10.1.132.21:8001/`): script exits with code 1, check server connectivity
 2. **Empty or malformed response**: script reports specific parsing error
 3. **`requests` not installed**: run `pip3 install -r requirements.txt`
+4. **Quality gate failed**: re-check `references/quality-gate.md`,补齐链接或压缩长度后重发
 
 ## Examples
 
@@ -82,9 +100,13 @@ The agent will receive the message and should:
 User: "帮我生成今天的院长早报"
 
 Agent:
-1. `cd .../dean-briefing/scripts && python3 generate_briefing.py`
+1. `python3 nanobot/skills/dean-briefing/scripts/generate_briefing.py`
 2. Extract report from stdout
-3. Send via message tool
+3. Validate quality gate, then send via message tool (or reply directly in chat without creating local report files)
+
+## References
+
+- `references/quality-gate.md` - Final delivery quality gate
 
 ### Example 2: Set up daily automation
 User: "设置每天早上9点自动推送院长早报"

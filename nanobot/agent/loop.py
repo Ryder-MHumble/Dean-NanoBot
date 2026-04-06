@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import re
 from pathlib import Path
 from typing import Any
 
@@ -21,6 +22,14 @@ from nanobot.agent.tools.cron import CronTool
 from nanobot.agent.subagent import SubagentManager
 from nanobot.session.manager import SessionManager
 from nanobot.agent import usage as _usage
+
+
+PROGRESS_ONLY_PATTERNS = (
+    re.compile(r"^\s*(?:正在)?查询中", re.IGNORECASE),
+    re.compile(r"请稍候(?:片刻)?"),
+    re.compile(r"我正在从.*?(?:获取|查询)"),
+    re.compile(r"查询完成后我会"),
+)
 
 
 class AgentLoop:
@@ -173,6 +182,25 @@ class AgentLoop:
         """Stop the agent loop."""
         self._running = False
         logger.info("Agent loop stopping")
+
+    def _is_progress_only_response(self, content: str | None) -> bool:
+        """Detect placeholder replies that should not be treated as final answers."""
+        if not content:
+            return False
+
+        text = content.strip()
+        if not text or len(text) > 400:
+            return False
+
+        return any(pattern.search(text) for pattern in PROGRESS_ONLY_PATTERNS)
+
+    def _build_progress_correction_message(self) -> str:
+        """Prompt the model to continue instead of stopping at a placeholder."""
+        return (
+            "系统纠正：你刚才只输出了进度占位话术（如“查询中”“请稍候”），这不是有效最终答案。"
+            "现在必须继续完成任务：优先调用相关技能/API并直接返回结果；"
+            "若确实阻塞，只能说明具体阻塞原因和已验证事实，不要再次输出进度占位。"
+        )
     
     async def _process_message(self, msg: InboundMessage) -> OutboundMessage | None:
         """
@@ -223,6 +251,7 @@ class AgentLoop:
         # Agent loop
         iteration = 0
         final_content = None
+        progress_only_corrections = 0
         
         while iteration < self.max_iterations:
             iteration += 1
@@ -262,6 +291,26 @@ class AgentLoop:
                         messages, tool_call.id, tool_call.name, result
                     )
             else:
+                if self._is_progress_only_response(response.content):
+                    progress_only_corrections += 1
+                    logger.warning(
+                        f"Model returned progress-only response for {msg.channel}:{msg.sender_id}; correction #{progress_only_corrections}"
+                    )
+                    if progress_only_corrections >= 3:
+                        final_content = "抱歉，本次查询没有生成有效结果。请重试一次；若问题持续，请联系 AI 产品经理孙铭浩。"
+                        break
+
+                    messages = self.context.add_assistant_message(
+                        messages,
+                        response.content,
+                        reasoning_content=response.reasoning_content,
+                    )
+                    messages.append({
+                        "role": "user",
+                        "content": self._build_progress_correction_message(),
+                    })
+                    continue
+
                 # No tool calls, we're done
                 final_content = response.content
                 break
@@ -335,6 +384,7 @@ class AgentLoop:
         # Agent loop (limited for announce handling)
         iteration = 0
         final_content = None
+        progress_only_corrections = 0
         
         while iteration < self.max_iterations:
             iteration += 1
@@ -370,6 +420,26 @@ class AgentLoop:
                         messages, tool_call.id, tool_call.name, result
                     )
             else:
+                if self._is_progress_only_response(response.content):
+                    progress_only_corrections += 1
+                    logger.warning(
+                        f"Model returned progress-only system response for {origin_channel}:{origin_chat_id}; correction #{progress_only_corrections}"
+                    )
+                    if progress_only_corrections >= 3:
+                        final_content = "抱歉，后台任务没有生成有效结果。请稍后重试。"
+                        break
+
+                    messages = self.context.add_assistant_message(
+                        messages,
+                        response.content,
+                        reasoning_content=response.reasoning_content,
+                    )
+                    messages.append({
+                        "role": "user",
+                        "content": self._build_progress_correction_message(),
+                    })
+                    continue
+
                 final_content = response.content
                 break
         

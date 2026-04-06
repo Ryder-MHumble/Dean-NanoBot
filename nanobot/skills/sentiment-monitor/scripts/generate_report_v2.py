@@ -17,6 +17,41 @@ import os
 from typing import Dict, List, Any, Optional
 from datetime import datetime
 
+MODE_CONFIGS: Dict[str, Dict[str, int]] = {
+    "fast": {
+        "account_top_posts_per_account": 3,
+        "topic_suggestions_limit": 4,
+        "exec_actions_limit": 3,
+        "topic_from_trends_limit": 2,
+        "topic_from_competitor_limit": 2,
+        "high_risk_limit": 3,
+        "medium_risk_limit": 2,
+        "risk_title_chars": 60,
+        "risk_keywords_per_item": 3,
+        "opportunity_limit": 5,
+        "opportunity_title_chars": 60,
+        "checklist_limit": 5,
+        "checklist_high_risk_limit": 2,
+        "checklist_medium_risk_limit": 1,
+    },
+    "standard": {
+        "account_top_posts_per_account": 5,
+        "topic_suggestions_limit": 6,
+        "exec_actions_limit": 5,
+        "topic_from_trends_limit": 3,
+        "topic_from_competitor_limit": 3,
+        "high_risk_limit": 4,
+        "medium_risk_limit": 3,
+        "risk_title_chars": 80,
+        "risk_keywords_per_item": 4,
+        "opportunity_limit": 8,
+        "opportunity_title_chars": 80,
+        "checklist_limit": 6,
+        "checklist_high_risk_limit": 3,
+        "checklist_medium_risk_limit": 2,
+    },
+}
+
 
 def load_config() -> Dict[str, Any]:
     """Load configuration from config.json."""
@@ -44,12 +79,42 @@ def get_platform_name(platform: str) -> str:
     return config.get("platform_names_cn", {}).get(platform, platform)
 
 
+def get_rank_priority(index: int) -> str:
+    """Convert a 1-based rank into a stable P1/P2/P3 priority label."""
+    if index <= 1:
+        return "P1"
+    if index <= 3:
+        return "P2"
+    return "P3"
+
+
+def get_risk_priority(severity: str) -> str:
+    """Map risk severity to a user-facing priority label."""
+    if severity == "high":
+        return "P1"
+    if severity == "medium":
+        return "P2"
+    return "P3"
+
+
+def normalize_mode(mode: str) -> str:
+    normalized = (mode or "standard").strip().lower()
+    if normalized not in MODE_CONFIGS:
+        return "standard"
+    return normalized
+
+
 # ============================================================
 # Part 1: 官方账号运营分析
 # ============================================================
 
-def generate_account_report(account_analysis: Dict, fullvolume_analysis: Optional[Dict] = None) -> str:
+def generate_account_report(
+    account_analysis: Dict,
+    fullvolume_analysis: Optional[Dict] = None,
+    mode: str = "standard",
+) -> str:
     """生成维度一：官方账号运营分析"""
+    mode_config = MODE_CONFIGS[normalize_mode(mode)]
     total_posts = account_analysis.get("total_posts", 0)
     total_comments = account_analysis.get("total_comments", 0)
     accounts = account_analysis.get("accounts", [])
@@ -94,7 +159,8 @@ def generate_account_report(account_analysis: Dict, fullvolume_analysis: Optiona
         if not top_posts:
             continue
         sections.append(f"**{acc['account']}**\n\n")
-        for i, post in enumerate(top_posts[:3], 1):
+        for i, post in enumerate(top_posts[:mode_config["account_top_posts_per_account"]], 1):
+            priority = get_rank_priority(i)
             eng = sum(post["engagement"].values())
             title = post["title"][:50] if post["title"] else post["content"][:50]
             sentiment = post["sentiment"]["label"]
@@ -106,10 +172,10 @@ def generate_account_report(account_analysis: Dict, fullvolume_analysis: Optiona
                     label_map = {"likes": "赞", "comments": "评", "shares": "转", "collects": "藏", "views": "播"}
                     parts.append(f"{v}{label_map.get(k, k)}")
             eng_str = " + ".join(parts) + f" = **{format_number(eng)}**" if parts else format_number(eng)
-            sections.append(f"{i}. 《{title}》\n")
+            sections.append(f"{i}. [{priority}] 《{title}》\n")
             sections.append(f"   - 互动：{eng_str} | 情感：{sent_emoji} {sent_cn}\n")
             if post.get("url"):
-                sections.append(f"   - [🔗 查看原文]({post['url']})\n")
+                sections.append(f"   - 原始链接：[查看原文]({post['url']})\n")
             sections.append("\n")
 
     # 1.3 评论主题洞察
@@ -135,7 +201,15 @@ def generate_account_report(account_analysis: Dict, fullvolume_analysis: Optiona
     sections.append(_generate_account_competitor_comparison(accounts_sorted))
 
     # 1.5 运营建议
-    sections.append(_generate_account_recommendations(accounts_sorted, comment_themes, account_analysis, fullvolume_analysis))
+    sections.append(
+        _generate_account_recommendations(
+            accounts_sorted,
+            comment_themes,
+            account_analysis,
+            fullvolume_analysis,
+            mode_config,
+        )
+    )
 
     sections.append("---\n\n")
     return "".join(sections)
@@ -184,9 +258,12 @@ def _generate_account_recommendations(
     accounts: List[Dict],
     comment_themes: List[Dict],
     account_analysis: Dict,
-    fullvolume_analysis: Optional[Dict] = None
+    fullvolume_analysis: Optional[Dict] = None,
+    mode_config: Optional[Dict[str, int]] = None,
 ) -> str:
     """账号维度：选题建议 + 运营行动建议（有理有据，具体可执行）"""
+    if mode_config is None:
+        mode_config = MODE_CONFIGS["standard"]
     section = "### 1.5 内容运营建议\n\n"
 
     # 所有账号帖子按互动量排序
@@ -207,13 +284,13 @@ def _generate_account_recommendations(
             if t["sentiment"] in ("positive", "neutral") and t["count"] >= 2
         ]
         good_topics.sort(key=lambda x: x["avg_engagement"], reverse=True)
-        for t in good_topics[:2]:
+        for t in good_topics[:mode_config["topic_from_trends_limit"]]:
             topic = t["topic"]
             cnt = t["count"]
             avg_eng = format_number(int(t["avg_engagement"]))
             sent_emoji = get_sentiment_emoji(t["sentiment"])
             topic_suggestions.append(
-                f"- 📌 **选题：#{topic}** — 全网已有 {cnt} 篇相关内容，平均互动 {avg_eng}，"
+                f"- {get_rank_priority(len(topic_suggestions) + 1)} | 📌 **选题：#{topic}** — 全网已有 {cnt} 篇相关内容，平均互动 {avg_eng}，"
                 f"情感以 {sent_emoji} 为主。建议本周在官方账号发布一条关于「{topic}」的内容，"
                 f"借势当前讨论热度。"
             )
@@ -221,15 +298,15 @@ def _generate_account_recommendations(
     # 2) 从竞品账号高互动帖子中提炼选题角度
     if fullvolume_analysis and len(accounts) >= 2:
         competitor_accounts = accounts[1:]  # 排除第一个（假设是我方账号）
-        for comp_acc in competitor_accounts[:2]:
+        for comp_acc in competitor_accounts[:mode_config["topic_from_competitor_limit"]]:
             comp_top = comp_acc.get("top_posts", [])
             if comp_top:
                 best = comp_top[0]
                 eng = sum(best["engagement"].values())
                 title = best["title"][:30] if best["title"] else best["content"][:30]
-                url_part = f" [🔗 参考]({best['url']})" if best.get("url") else ""
+                url_part = f" | 原始链接：[参考]({best['url']})" if best.get("url") else ""
                 topic_suggestions.append(
-                    f"- 📌 **借鉴竞品选题**：{comp_acc['account']} 的《{title}》"
+                    f"- {get_rank_priority(len(topic_suggestions) + 1)} | 📌 **借鉴竞品选题**：{comp_acc['account']} 的《{title}》"
                     f"获得 {format_number(eng)} 互动{url_part}。"
                     f"可参考其角度，结合我方特色发布差异化内容。"
                 )
@@ -239,9 +316,9 @@ def _generate_account_recommendations(
         top = all_top_posts[0]
         eng = sum(top["engagement"].values())
         title = top["title"][:30] if top["title"] else top["content"][:30]
-        url_part = f" [🔗 原文]({top['url']})" if top.get("url") else ""
+        url_part = f" | 原始链接：[原文]({top['url']})" if top.get("url") else ""
         topic_suggestions.append(
-            f"- 📌 **延伸爆款内容**：《{title}》是近期互动最高的帖子（{format_number(eng)}）{url_part}。"
+            f"- {get_rank_priority(len(topic_suggestions) + 1)} | 📌 **延伸爆款内容**：《{title}》是近期互动最高的帖子（{format_number(eng)}）{url_part}。"
             f"分析其话题切入角度和内容结构，本周发布一条延续性内容（Part 2 / 相关话题）。"
         )
 
@@ -253,13 +330,13 @@ def _generate_account_recommendations(
         if positive_themes[0].get("top_comment", {}).get("text"):
             top_comment_text = f"（用户说：「{positive_themes[0]['top_comment']['text'][:40]}...」）"
         topic_suggestions.append(
-            f"- 📌 **放大用户认可点**：评论中 {kws} 出现频率高{top_comment_text}，"
+            f"- {get_rank_priority(len(topic_suggestions) + 1)} | 📌 **放大用户认可点**：评论中 {kws} 出现频率高{top_comment_text}，"
             f"说明用户对这类内容反应积极。建议专门围绕这些话题策划 1-2 篇内容。"
         )
 
     if topic_suggestions:
         section += "**本周选题建议（有数据支撑）**\n\n"
-        section += "\n".join(topic_suggestions[:4])
+        section += "\n".join(topic_suggestions[:mode_config["topic_suggestions_limit"]])
         section += "\n\n"
 
     # ── 二、执行层面建议 ─────────────────────────────────────
@@ -304,7 +381,7 @@ def _generate_account_recommendations(
         )
 
     if exec_actions:
-        section += "\n".join(exec_actions[:3])
+        section += "\n".join(exec_actions[:mode_config["exec_actions_limit"]])
         section += "\n\n"
 
     if not topic_suggestions and not exec_actions:
@@ -317,8 +394,10 @@ def _generate_account_recommendations(
 # Part 2: 全网舆情洞察
 # ============================================================
 
-def generate_fullvolume_report(fullvolume_analysis: Dict) -> str:
+def generate_fullvolume_report(fullvolume_analysis: Dict, mode: str = "standard") -> str:
     """生成维度二：全网舆情洞察"""
+    normalized_mode = normalize_mode(mode)
+    mode_config = MODE_CONFIGS[normalized_mode]
     metrics = fullvolume_analysis.get("metrics", {})
     total_items = metrics.get("total_items", 0)
 
@@ -342,16 +421,18 @@ def generate_fullvolume_report(fullvolume_analysis: Dict) -> str:
     sections.append(_generate_volume_overview(fullvolume_analysis))
 
     # 2.2 关键风险
-    sections.append(_generate_focused_risks(fullvolume_analysis))
+    sections.append(_generate_focused_risks(fullvolume_analysis, mode_config))
 
     # 2.3 正向机会
-    sections.append(_generate_opportunities(fullvolume_analysis))
+    sections.append(_generate_opportunities(fullvolume_analysis, mode_config))
 
     # 2.4 立即执行清单
-    sections.append(_generate_action_checklist(fullvolume_analysis))
+    sections.append(_generate_action_checklist(fullvolume_analysis, mode_config))
 
     sections.append("---\n\n")
-    sections.append(f"*本报告由 Nanobot 舆情监控系统自动生成 | 双维度模板 v3.0 | 生成时间：{datetime.now().strftime('%Y-%m-%d %H:%M')}*\n")
+    sections.append(
+        f"*本报告由 Nanobot 舆情监控系统自动生成 | 双维度模板 v3.0 | 模式：{normalized_mode} | 生成时间：{datetime.now().strftime('%Y-%m-%d %H:%M')}*\n"
+    )
     return "".join(sections)
 
 
@@ -386,7 +467,7 @@ def _generate_volume_overview(analysis: Dict) -> str:
     return section
 
 
-def _generate_focused_risks(analysis: Dict) -> str:
+def _generate_focused_risks(analysis: Dict, mode_config: Dict[str, int]) -> str:
     """2.2 关键风险（仅有价值的，附回应建议）"""
     risks = analysis.get("risks", [])
     high = [r for r in risks if r["severity"] == "high"]
@@ -399,17 +480,19 @@ def _generate_focused_risks(analysis: Dict) -> str:
 
     def format_risk(risk: Dict, idx: int, priority: str) -> str:
         item = risk["item"]
-        title = item["title"][:60] if item["title"] else item["content"][:60]
+        title_chars = mode_config["risk_title_chars"]
+        title = item["title"][:title_chars] if item["title"] else item["content"][:title_chars]
         eng = sum(item["engagement"].values())
         platform = get_platform_name(item["platform"])
         author = item["author"]["name"]
-        keywords = "、".join(risk["keywords"][:3])
+        keywords = "、".join(risk["keywords"][:mode_config["risk_keywords_per_item"]])
         color = "🔴" if priority == "high" else "🟡"
-        text = f"#### {color} 风险{idx}：{keywords}\n\n"
+        label = get_risk_priority(priority)
+        text = f"#### {label} / {color} 风险{idx}：{keywords}\n\n"
         text += f"> 《{title}》\n\n"
         text += f"- 📱 平台：{platform} | 👤 作者：{author} | 📊 互动：{format_number(eng)}\n"
         if item.get("url"):
-            text += f"- 🔗 [查看原文]({item['url']})\n"
+            text += f"- 原始链接：[查看原文]({item['url']})\n"
         text += f"\n**回应建议**：\n"
         # 根据关键词类型给出具体建议
         complaint_kws = {"投诉", "举报", "骗局", "欺骗", "违规", "虚假"}
@@ -429,18 +512,18 @@ def _generate_focused_risks(analysis: Dict) -> str:
 
     if high:
         section += "**高优先级（48小时内处理）**\n\n"
-        for i, r in enumerate(high[:3], 1):
+        for i, r in enumerate(high[:mode_config["high_risk_limit"]], 1):
             section += format_risk(r, i, "high")
 
     if medium:
         section += "**中优先级（本周内关注）**\n\n"
-        for i, r in enumerate(medium[:2], 1):
+        for i, r in enumerate(medium[:mode_config["medium_risk_limit"]], 1):
             section += format_risk(r, i, "medium")
 
     return section
 
 
-def _generate_opportunities(analysis: Dict) -> str:
+def _generate_opportunities(analysis: Dict, mode_config: Dict[str, int]) -> str:
     """2.3 正向机会：可借势放大的高互动正面内容"""
     all_items = analysis.get("all_items", [])
     positive_items = [
@@ -452,21 +535,23 @@ def _generate_opportunities(analysis: Dict) -> str:
         return "### 2.3 正向机会\n\n当前暂无高互动正面内容可借势。\n\n"
 
     positive_items.sort(key=lambda x: sum(x["engagement"].values()), reverse=True)
-    top_items = positive_items[:5]
+    top_items = positive_items[:mode_config["opportunity_limit"]]
 
     section = "### 2.3 正向机会\n\n"
     section += "以下高互动正面内容可转发/借势放大：\n\n"
 
     for i, item in enumerate(top_items, 1):
+        priority = get_rank_priority(i)
         eng = sum(item["engagement"].values())
-        title = item["title"][:60] if item["title"] else item["content"][:60]
+        title_chars = mode_config["opportunity_title_chars"]
+        title = item["title"][:title_chars] if item["title"] else item["content"][:title_chars]
         platform = get_platform_name(item["platform"])
         author = item["author"]["name"]
 
-        section += f"{i}. **《{title}》** — {format_number(eng)} 互动\n"
+        section += f"{i}. [{priority}] **《{title}》** — {format_number(eng)} 互动\n"
         section += f"   - 来源：{platform} @{author}\n"
         if item.get("url"):
-            section += f"   - [🔗 查看并转发]({item['url']})\n"
+            section += f"   - 原始链接：[查看并转发]({item['url']})\n"
         # 给出具体可执行行动
         if eng > 1000:
             section += f"   - 💡 互动量高，建议官方账号直接转发，或截图发到内部群分享正面声音。\n"
@@ -477,7 +562,7 @@ def _generate_opportunities(analysis: Dict) -> str:
     return section
 
 
-def _generate_action_checklist(analysis: Dict) -> str:
+def _generate_action_checklist(analysis: Dict, mode_config: Dict[str, int]) -> str:
     """2.4 立即执行清单（3-5 条，具体可执行）"""
     metrics = analysis["metrics"]
     risks = analysis.get("risks", [])
@@ -486,8 +571,6 @@ def _generate_action_checklist(analysis: Dict) -> str:
 
     high_risks = [r for r in risks if r["severity"] == "high"]
     medium_risks = [r for r in risks if r["severity"] == "medium"]
-    negative_pct = metrics["sentiment_pct"].get("negative", 0)
-    total_comments = comments_data.get("total_comments", 0)
     high_risk_comments = comments_data.get("high_risk_comments", [])
 
     section = "### 2.4 立即执行清单\n\n"
@@ -495,27 +578,29 @@ def _generate_action_checklist(analysis: Dict) -> str:
 
     # 行动 1：处理高风险内容
     if high_risks:
-        for r in high_risks[:2]:
+        for r in high_risks[:mode_config["checklist_high_risk_limit"]]:
             item = r["item"]
             title = item["title"][:25] if item["title"] else item["content"][:25]
-            url_part = f" → [查看]({item['url']})" if item.get("url") else ""
+            url_part = f" → [原始链接]({item['url']})" if item.get("url") else ""
             actions.append(
-                f"- [ ] **【48h内】** 回应高风险内容《{title}...》{url_part}"
+                f"- [ ] **【48h内 / P1】** 回应高风险内容《{title}...》{url_part}"
                 f"（关键词：{', '.join(r['keywords'][:2])}）"
             )
 
     # 行动 2：回应中风险内容
-    if medium_risks and len(actions) < 5:
-        r = medium_risks[0]
-        item = r["item"]
-        title = item["title"][:25] if item["title"] else item["content"][:25]
-        url_part = f" → [查看]({item['url']})" if item.get("url") else ""
-        actions.append(
-            f"- [ ] **【本周内】** 官方回复中风险帖子《{title}...》{url_part}"
-        )
+    if medium_risks and len(actions) < mode_config["checklist_limit"]:
+        for r in medium_risks[:mode_config["checklist_medium_risk_limit"]]:
+            if len(actions) >= mode_config["checklist_limit"]:
+                break
+            item = r["item"]
+            title = item["title"][:25] if item["title"] else item["content"][:25]
+            url_part = f" → [原始链接]({item['url']})" if item.get("url") else ""
+            actions.append(
+                f"- [ ] **【本周内 / P2】** 官方回复中风险帖子《{title}...》{url_part}"
+            )
 
     # 行动 3：高风险评论回复
-    if high_risk_comments and len(actions) < 5:
+    if high_risk_comments and len(actions) < mode_config["checklist_limit"]:
         actions.append(
             f"- [ ] **【本周内】** 回复 {len(high_risk_comments)} 条高风险评论"
             f"（含关键词：{', '.join(high_risk_comments[0]['keywords'][:2])}）"
@@ -526,18 +611,18 @@ def _generate_action_checklist(analysis: Dict) -> str:
         [i for i in all_items if i["sentiment"]["label"] == "positive"],
         key=lambda x: sum(x["engagement"].values()), reverse=True
     )
-    if positive_items and len(actions) < 5:
+    if positive_items and len(actions) < mode_config["checklist_limit"]:
         top = positive_items[0]
         eng = sum(top["engagement"].values())
         title = top["title"][:25] if top["title"] else top["content"][:25]
-        url_part = f" → [查看]({top['url']})" if top.get("url") else ""
+        url_part = f" → [原始链接]({top['url']})" if top.get("url") else ""
         actions.append(
-            f"- [ ] **【本周内】** 转发高互动正面内容《{title}...》"
+            f"- [ ] **【本周内 / P2】** 转发高互动正面内容《{title}...》"
             f"（互动量 {format_number(eng)}）{url_part}"
         )
 
     # 行动 5：无风险时的主动策略
-    if not high_risks and not medium_risks and len(actions) < 5:
+    if not high_risks and not medium_risks and len(actions) < mode_config["checklist_limit"]:
         # 找到平台声量最高的，建议发布内容
         platform_dist = metrics.get("platform_dist", {})
         if platform_dist:
@@ -548,7 +633,7 @@ def _generate_action_checklist(analysis: Dict) -> str:
             )
 
     if actions:
-        for action in actions[:5]:
+        for action in actions[:mode_config["checklist_limit"]]:
             section += action + "\n"
     else:
         section += "- [ ] **【本周内】** 当前无紧急事项，建议安排一次内容选题会，规划下周内容方向。\n"
@@ -561,7 +646,7 @@ def _generate_action_checklist(analysis: Dict) -> str:
 # 主入口
 # ============================================================
 
-def generate_report(analysis: Dict) -> str:
+def generate_report(analysis: Dict, mode: str = "standard") -> str:
     """
     生成完整双维度报告。
 
@@ -578,15 +663,17 @@ def generate_report(analysis: Dict) -> str:
     Returns:
         完整 Markdown 报告字符串
     """
+    normalized_mode = normalize_mode(mode)
+
     # 判断是否为新双维度模式
     if "account_analysis" in analysis or "fullvolume_analysis" in analysis:
-        return _generate_dual_report(analysis)
+        return _generate_dual_report(analysis, normalized_mode)
 
     # 旧模式向后兼容：仅生成全网维度（使用旧函数）
-    return _generate_legacy_report(analysis)
+    return _generate_legacy_report(analysis, normalized_mode)
 
 
-def _generate_dual_report(analysis: Dict) -> str:
+def _generate_dual_report(analysis: Dict, mode: str = "standard") -> str:
     """生成双维度报告"""
     metadata = analysis.get("metadata", {})
     data_date = metadata.get("data_date", "全量数据")
@@ -604,16 +691,16 @@ def _generate_dual_report(analysis: Dict) -> str:
 
     account_section = ""
     if "account_analysis" in analysis:
-        account_section = generate_account_report(analysis["account_analysis"], fullvolume_analysis)
+        account_section = generate_account_report(analysis["account_analysis"], fullvolume_analysis, mode=mode)
 
     fullvolume_section = ""
     if fullvolume_analysis is not None:
-        fullvolume_section = generate_fullvolume_report(fullvolume_analysis)
+        fullvolume_section = generate_fullvolume_report(fullvolume_analysis, mode=mode)
 
     return header + account_section + fullvolume_section
 
 
-def _generate_legacy_report(analysis: Dict) -> str:
+def _generate_legacy_report(analysis: Dict, mode: str = "standard") -> str:
     """旧版单维度报告（向后兼容）"""
     # 简化：只生成执行摘要 + 风险 + 全网维度
     metadata = analysis.get("metadata", {})
@@ -627,7 +714,7 @@ def _generate_legacy_report(analysis: Dict) -> str:
 ---
 
 """
-    return header + generate_fullvolume_report(analysis)
+    return header + generate_fullvolume_report(analysis, mode=mode)
 
 
 # ============================================================
@@ -635,7 +722,7 @@ def _generate_legacy_report(analysis: Dict) -> str:
 # ============================================================
 
 def generate_executive_summary(analysis: Dict) -> str:
-    return _generate_legacy_report(analysis)
+    return _generate_legacy_report(analysis, mode="standard")
 
 
 if __name__ == "__main__":

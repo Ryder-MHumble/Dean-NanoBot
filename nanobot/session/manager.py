@@ -1,6 +1,7 @@
 """Session management for conversation history."""
 
 import json
+import re
 from pathlib import Path
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -9,6 +10,31 @@ from typing import Any
 from loguru import logger
 
 from nanobot.utils.helpers import ensure_dir, safe_filename
+
+
+LOW_SIGNAL_ASSISTANT_PATTERNS = (
+    re.compile(r"^\s*(?:正在)?查询中", re.IGNORECASE),
+    re.compile(r"请稍候(?:片刻)?"),
+    re.compile(r"我正在从.*?(?:获取|查询)"),
+    re.compile(r"查询完成后我会"),
+    re.compile(r"已启动后台任务"),
+    re.compile(r"抱歉，查询遇到了技术问题"),
+    re.compile(r"当前(?:内部)?(?:情报系统|政策(?:数据库|接口)?|学者接口|学生接口|机构接口).*(?:暂时无法|不可用)"),
+    re.compile(r"建议替代方案"),
+    re.compile(r"你可以通过以下渠道了解"),
+)
+
+
+def _is_low_signal_assistant_message(content: str) -> bool:
+    """Filter transient assistant replies that should not steer later turns."""
+    text = content.strip()
+    if not text:
+        return False
+
+    if len(text) > 1200:
+        return False
+
+    return any(pattern.search(text) for pattern in LOW_SIGNAL_ASSISTANT_PATTERNS)
 
 
 @dataclass
@@ -48,9 +74,28 @@ class Session:
         """
         # Get recent messages
         recent = self.messages[-max_messages:] if len(self.messages) > max_messages else self.messages
-        
+
+        filtered = []
+        filtered_count = 0
+        for message in recent:
+            if (
+                message.get("role") == "assistant"
+                and _is_low_signal_assistant_message(str(message.get("content", "")))
+            ):
+                filtered_count += 1
+                if filtered and filtered[-1].get("role") == "user":
+                    filtered.pop()
+                    filtered_count += 1
+                continue
+            filtered.append(message)
+
+        if filtered_count:
+            logger.debug(
+                f"Session {self.key}: filtered {filtered_count} low-signal assistant messages from history"
+            )
+
         # Convert to LLM format (just role and content)
-        return [{"role": m["role"], "content": m["content"]} for m in recent]
+        return [{"role": m["role"], "content": m["content"]} for m in filtered]
     
     def clear(self) -> None:
         """Clear all messages in the session."""
