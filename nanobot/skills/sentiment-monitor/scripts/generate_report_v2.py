@@ -176,6 +176,8 @@ def generate_account_report(
             sections.append(f"   - 互动：{eng_str} | 情感：{sent_emoji} {sent_cn}\n")
             if post.get("url"):
                 sections.append(f"   - 原始链接：[查看原文]({post['url']})\n")
+            else:
+                sections.append("   - 原始链接：原始链接缺失（需回源补录）\n")
             sections.append("\n")
 
     # 1.3 评论主题洞察
@@ -304,7 +306,11 @@ def _generate_account_recommendations(
                 best = comp_top[0]
                 eng = sum(best["engagement"].values())
                 title = best["title"][:30] if best["title"] else best["content"][:30]
-                url_part = f" | 原始链接：[参考]({best['url']})" if best.get("url") else ""
+                url_part = (
+                    f" | 原始链接：[参考]({best['url']})"
+                    if best.get("url")
+                    else " | 原始链接：原始链接缺失"
+                )
                 topic_suggestions.append(
                     f"- {get_rank_priority(len(topic_suggestions) + 1)} | 📌 **借鉴竞品选题**：{comp_acc['account']} 的《{title}》"
                     f"获得 {format_number(eng)} 互动{url_part}。"
@@ -316,7 +322,11 @@ def _generate_account_recommendations(
         top = all_top_posts[0]
         eng = sum(top["engagement"].values())
         title = top["title"][:30] if top["title"] else top["content"][:30]
-        url_part = f" | 原始链接：[原文]({top['url']})" if top.get("url") else ""
+        url_part = (
+            f" | 原始链接：[原文]({top['url']})"
+            if top.get("url")
+            else " | 原始链接：原始链接缺失"
+        )
         topic_suggestions.append(
             f"- {get_rank_priority(len(topic_suggestions) + 1)} | 📌 **延伸爆款内容**：《{title}》是近期互动最高的帖子（{format_number(eng)}）{url_part}。"
             f"分析其话题切入角度和内容结构，本周发布一条延续性内容（Part 2 / 相关话题）。"
@@ -493,6 +503,8 @@ def _generate_focused_risks(analysis: Dict, mode_config: Dict[str, int]) -> str:
         text += f"- 📱 平台：{platform} | 👤 作者：{author} | 📊 互动：{format_number(eng)}\n"
         if item.get("url"):
             text += f"- 原始链接：[查看原文]({item['url']})\n"
+        else:
+            text += "- 原始链接：原始链接缺失（需回源补录）\n"
         text += f"\n**回应建议**：\n"
         # 根据关键词类型给出具体建议
         complaint_kws = {"投诉", "举报", "骗局", "欺骗", "违规", "虚假"}
@@ -552,6 +564,8 @@ def _generate_opportunities(analysis: Dict, mode_config: Dict[str, int]) -> str:
         section += f"   - 来源：{platform} @{author}\n"
         if item.get("url"):
             section += f"   - 原始链接：[查看并转发]({item['url']})\n"
+        else:
+            section += "   - 原始链接：原始链接缺失（需回源补录）\n"
         # 给出具体可执行行动
         if eng > 1000:
             section += f"   - 💡 互动量高，建议官方账号直接转发，或截图发到内部群分享正面声音。\n"
@@ -581,7 +595,11 @@ def _generate_action_checklist(analysis: Dict, mode_config: Dict[str, int]) -> s
         for r in high_risks[:mode_config["checklist_high_risk_limit"]]:
             item = r["item"]
             title = item["title"][:25] if item["title"] else item["content"][:25]
-            url_part = f" → [原始链接]({item['url']})" if item.get("url") else ""
+            url_part = (
+                f" → [原始链接]({item['url']})"
+                if item.get("url")
+                else " → 原始链接缺失"
+            )
             actions.append(
                 f"- [ ] **【48h内 / P1】** 回应高风险内容《{title}...》{url_part}"
                 f"（关键词：{', '.join(r['keywords'][:2])}）"
@@ -594,7 +612,11 @@ def _generate_action_checklist(analysis: Dict, mode_config: Dict[str, int]) -> s
                 break
             item = r["item"]
             title = item["title"][:25] if item["title"] else item["content"][:25]
-            url_part = f" → [原始链接]({item['url']})" if item.get("url") else ""
+            url_part = (
+                f" → [原始链接]({item['url']})"
+                if item.get("url")
+                else " → 原始链接缺失"
+            )
             actions.append(
                 f"- [ ] **【本周内 / P2】** 官方回复中风险帖子《{title}...》{url_part}"
             )
@@ -615,7 +637,11 @@ def _generate_action_checklist(analysis: Dict, mode_config: Dict[str, int]) -> s
         top = positive_items[0]
         eng = sum(top["engagement"].values())
         title = top["title"][:25] if top["title"] else top["content"][:25]
-        url_part = f" → [原始链接]({top['url']})" if top.get("url") else ""
+        url_part = (
+            f" → [原始链接]({top['url']})"
+            if top.get("url")
+            else " → 原始链接缺失"
+        )
         actions.append(
             f"- [ ] **【本周内 / P2】** 转发高互动正面内容《{title}...》"
             f"（互动量 {format_number(eng)}）{url_part}"
@@ -631,6 +657,19 @@ def _generate_action_checklist(analysis: Dict, mode_config: Dict[str, int]) -> s
                 f"- [ ] **【本周内】** 在声量最高的 {get_platform_name(top_platform)}"
                 f"（共 {platform_dist[top_platform]} 条提及）发布 1 条主动内容，把握当前热度。"
             )
+
+    # 质量门禁要求清单保持 3-5 条，低风险场景补足最少动作数。
+    if len(actions) < 3:
+        fallback_actions = [
+            "- [ ] **【本周内】** 复盘本周互动最高的 3 条正向内容，沉淀 1 条可复用选题模板。",
+            "- [ ] **【本周内】** 人工抽样检查 10 条高互动中性内容，识别潜在风险并补充回应策略。",
+            "- [ ] **【48h内】** 建立“投诉/举报/退款”关键词巡检表，每天至少复查 2 次。",
+        ]
+        for fallback in fallback_actions:
+            if len(actions) >= 3 or len(actions) >= mode_config["checklist_limit"]:
+                break
+            if fallback not in actions:
+                actions.append(fallback)
 
     if actions:
         for action in actions[:mode_config["checklist_limit"]]:

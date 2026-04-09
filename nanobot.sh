@@ -23,6 +23,14 @@ LOG_FILE="$LOG_DIR/gateway.log"
 # 自动加载 .env 文件（从脚本所在目录查找）
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ENV_FILE="$SCRIPT_DIR/.env"
+VENV_NANOBOT="$SCRIPT_DIR/.venv/bin/nanobot"
+
+# 启动命令优先使用仓库本地虚拟环境
+if [ -x "$VENV_NANOBOT" ]; then
+    NANOBOT_CMD="$VENV_NANOBOT"
+else
+    NANOBOT_CMD="nanobot"
+fi
 if [ -f "$ENV_FILE" ]; then
     set -o allexport
     # shellcheck disable=SC1090
@@ -94,7 +102,11 @@ do_start() {
     echo ""
 
     # 后台启动，stdout/stderr 写入日志
-    nohup nanobot gateway --port "$port" $verbose >> "$LOG_FILE" 2>&1 &
+    local cmd=("$NANOBOT_CMD" "gateway" "--port" "$port")
+    if [ -n "$verbose" ]; then
+        cmd+=("$verbose")
+    fi
+    nohup "${cmd[@]}" >> "$LOG_FILE" 2>&1 &
     local pid=$!
     echo "$pid" > "$PID_FILE"
 

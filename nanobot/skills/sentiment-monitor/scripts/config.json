@@ -1,5 +1,13 @@
 {
-  "data_source": "supabase",
+  "data_source": "backend_api",
+  "backend_api": {
+    "base_url": "http://127.0.0.1:8001",
+    "api_prefix": "/api/v1",
+    "timeout_seconds": 15,
+    "page_size": 100,
+    "max_pages": 50,
+    "max_detail_requests": 200
+  },
   "supabase": {
     "url": "${SUPABASE_URL}",
     "key": "${SUPABASE_KEY}"

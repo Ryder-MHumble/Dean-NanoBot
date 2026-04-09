@@ -36,6 +36,8 @@ except ImportError:
     from generate_report import generate_report
     print("⚠️  Using legacy report generator")
 
+from validate_intel_report import validate_report_text
+
 
 def load_config() -> Dict[str, Any]:
     """Load configuration from config.json, expanding ${VAR} placeholders."""
@@ -59,6 +61,11 @@ def parse_args() -> argparse.Namespace:
         dest="target_date",
         default=None,
         help="Optional target date in YYYY-MM-DD. If omitted, use all available data.",
+    )
+    parser.add_argument(
+        "--skip-validate",
+        action="store_true",
+        help="Skip report quality-gate validation.",
     )
     return parser.parse_args()
 
@@ -153,16 +160,20 @@ def load_keyword_data(config: Dict, target_date: Optional[date] = None) -> Tuple
     if total_items == 0:
         return all_data, {}
 
-    # 收集所有 content_id 以便加载评论
-    content_ids = set()
+    # 收集所有 content_id（保持稳定顺序）以便加载评论
+    content_ids: List[str] = []
+    seen_content_ids = set()
     for platform_data in all_data.values():
         for item in platform_data:
             for id_field in ['note_id', 'aweme_id', 'video_id', 'mblog_id']:
                 if id_field in item and item[id_field]:
-                    content_ids.add(item[id_field])
+                    content_id = item[id_field]
+                    if content_id not in seen_content_ids:
+                        seen_content_ids.add(content_id)
+                        content_ids.append(content_id)
                     break
 
-    comments_data = supabase_client.get_comments_by_content_ids(list(content_ids))
+    comments_data = supabase_client.get_comments_by_content_ids(content_ids)
     total_comments = sum(len(v) for v in comments_data.values())
     print(f"✅ Loaded {total_comments} comments for keyword search posts")
 
@@ -287,6 +298,57 @@ def main():
         import traceback
         traceback.print_exc()
         sys.exit(1)
+
+    # ── Validation ───────────────────────────────────────────────────────
+    if not args.skip_validate:
+        print("\n" + "=" * 70)
+        print("Step 4: Quality Gate Validation")
+        print("=" * 70)
+
+        max_chars = 5500 if args.mode == "fast" else 8000
+        require_dual_dimensions = account_analysis is not None and fullvolume_analysis is not None
+        require_action_checklist = fullvolume_analysis is not None
+        has_account_priority_items = bool(
+            account_analysis
+            and any(acc.get("top_posts") for acc in account_analysis.get("accounts", []))
+        )
+        has_fullvolume_priority_items = bool(
+            fullvolume_analysis
+            and (
+                fullvolume_analysis.get("risks")
+                or any(
+                    item.get("sentiment", {}).get("label") == "positive"
+                    for item in fullvolume_analysis.get("all_items", [])
+                )
+            )
+        )
+        require_priority = has_account_priority_items or has_fullvolume_priority_items
+        require_links = require_priority
+
+        errors, metrics = validate_report_text(
+            report,
+            require_priority=require_priority,
+            require_links=require_links,
+            require_dual_dimensions=require_dual_dimensions,
+            require_action_checklist=require_action_checklist,
+            max_chars=max_chars,
+            allow_missing_links=3,
+        )
+        if errors:
+            print("❌ Report validation failed:", file=sys.stderr)
+            for err in errors:
+                print(f"   - {err}", file=sys.stderr)
+            sys.exit(1)
+
+        print("✅ Report validation passed")
+        print(
+            "   metrics: "
+            f"chars={metrics.get('char_count', 0)}, "
+            f"priorities={metrics.get('priority_labels', 0)}, "
+            f"urls={metrics.get('urls', 0)}, "
+            f"missing_links={metrics.get('missing_link_marks', 0)}, "
+            f"checklist_items={metrics.get('checklist_items', 0)}"
+        )
 
     # ── Output ───────────────────────────────────────────────────────────
     print("\n" + "=" * 70)

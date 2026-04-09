@@ -1,268 +1,308 @@
 #!/usr/bin/env python3
 """
-Supabase Client for Sentiment Monitoring
-提供与Supabase数据库交互的所有方法
+Compatibility client for sentiment monitoring data access.
+
+Historical name kept as `SentimentSupabaseClient` to avoid changing existing
+callers, but data now comes from DeanAgent-Backend HTTP APIs backed by local
+PostgreSQL.
 """
 
+from __future__ import annotations
+
 import os
-import json
-from typing import Dict, List, Any, Optional
-from datetime import datetime, date, timedelta
-from supabase import create_client, Client
+from datetime import date, datetime
+from urllib.parse import quote
+from typing import Any, Dict, List, Optional
+
+import requests
 
 
 class SentimentSupabaseClient:
-    """舆情监控Supabase客户端"""
+    """Sentiment monitoring client backed by DeanAgent-Backend APIs."""
 
     def __init__(self, config: Dict[str, Any]):
-        """初始化Supabase客户端"""
-        supabase_config = config.get("supabase", {})
-        url = supabase_config.get("url") or os.getenv("SUPABASE_URL")
-        key = supabase_config.get("key") or os.getenv("SUPABASE_KEY")
+        backend_cfg = config.get("backend_api", {})
 
-        if not url or not key:
-            raise ValueError("Supabase URL and key are required")
+        env_base_url = (
+            os.getenv("DEAN_BACKEND_API_BASE_URL")
+            or os.getenv("BACKEND_API_BASE_URL")
+            or os.getenv("NANOBOT_BACKEND_API_BASE_URL")
+        )
+        base_url = (env_base_url or backend_cfg.get("base_url") or "http://127.0.0.1:8001").strip()
 
-        self.client: Client = create_client(url, key)
-        print(f"✅ Supabase client initialized: {url}")
+        if not base_url.startswith(("http://", "https://")):
+            raise ValueError("Invalid backend API base URL")
 
-    # ==================== 内容数据操作 ====================
+        self.base_url = base_url.rstrip("/")
+        self.api_prefix = backend_cfg.get("api_prefix", "/api/v1").rstrip("/")
+        self.timeout_seconds = int(backend_cfg.get("timeout_seconds", 15))
+        self.page_size = max(1, min(100, int(backend_cfg.get("page_size", 100))))
+        self.max_pages = max(1, int(backend_cfg.get("max_pages", 50)))
+        self.max_detail_requests = max(1, int(backend_cfg.get("max_detail_requests", 200)))
 
-    def get_all_contents(self, platform: Optional[str] = None) -> List[Dict]:
-        """
-        获取所有内容（不限日期）
+        self.session = requests.Session()
+        api_key = (backend_cfg.get("api_key") or os.getenv("BACKEND_API_KEY") or "").strip()
+        if api_key:
+            self.session.headers.update({"X-API-Key": api_key})
 
-        Args:
-            platform: 平台过滤 (xhs, douyin, bili, wb)，None 表示全平台
+        print(f"✅ Backend API client initialized: {self.base_url}{self.api_prefix}")
 
-        Returns:
-            内容列表
-        """
-        query = self.client.table("sentiment_contents").select("*")
+    # ==================== HTTP Helpers ====================
 
-        if platform:
-            query = query.eq("platform", platform)
+    def _url(self, path: str) -> str:
+        return f"{self.base_url}{self.api_prefix}{path}"
 
+    def _get(self, path: str, params: Optional[Dict[str, Any]] = None) -> Optional[Dict[str, Any]]:
         try:
-            response = query.execute()
-            print(f"   Loaded {len(response.data)} items from {platform or 'all platforms'}")
-            return response.data
-        except Exception as e:
-            print(f"❌ Error loading all contents: {e}")
-            return []
+            response = self.session.get(
+                self._url(path),
+                params=params,
+                timeout=self.timeout_seconds,
+            )
+            response.raise_for_status()
+            return response.json()
+        except Exception as exc:
+            print(f"❌ API request failed: GET {path} params={params} err={exc}")
+            return None
 
-    def get_contents_by_date(
+    @staticmethod
+    def _normalize_platform(platform: Optional[str]) -> Optional[str]:
+        if not platform:
+            return None
+        p = platform.strip().lower()
+        mapping = {
+            "douyin": "dy",
+            "dy": "dy",
+            "bilibili": "bili",
+            "bili": "bili",
+            "weibo": "wb",
+            "wb": "wb",
+            "xhs": "xhs",
+            "zhihu": "zhihu",
+        }
+        return mapping.get(p, p)
+
+    def _fetch_feed_all(
         self,
-        target_date: date,
-        platform: Optional[str] = None
-    ) -> List[Dict]:
-        """
-        查询指定日期的内容数据
+        platform: Optional[str] = None,
+        sort_by: str = "publish_time",
+        sort_order: str = "desc",
+    ) -> List[Dict[str, Any]]:
+        normalized_platform = self._normalize_platform(platform)
 
-        Args:
-            target_date: 目标日期
-            platform: 平台过滤 (xhs, douyin, bili, wb)
+        items: List[Dict[str, Any]] = []
+        total_pages: Optional[int] = None
 
-        Returns:
-            内容列表
-        """
-        # 由于publish_time字段可能是秒级或毫秒级时间戳，我们需要查询所有数据然后手动过滤
-        query = self.client.table("sentiment_contents").select("*")
+        for page in range(1, self.max_pages + 1):
+            params: Dict[str, Any] = {
+                "page": page,
+                "page_size": self.page_size,
+                "sort_by": sort_by,
+                "sort_order": sort_order,
+            }
+            if normalized_platform:
+                params["platform"] = normalized_platform
 
-        if platform:
-            query = query.eq("platform", platform)
+            payload = self._get("/sentiment/feed", params=params)
+            if payload is None:
+                break
+
+            page_items = payload.get("items", []) or []
+            items.extend(page_items)
+
+            if total_pages is None:
+                raw_total_pages = payload.get("total_pages")
+                total_pages = int(raw_total_pages) if raw_total_pages else 1
+
+            if page >= total_pages:
+                break
+
+        if total_pages and total_pages > self.max_pages:
+            print(
+                "⚠️  Feed pages truncated by max_pages: "
+                f"fetched={self.max_pages}, available={total_pages}"
+            )
+
+        return items
+
+    @staticmethod
+    def _publish_date(item: Dict[str, Any]) -> Optional[date]:
+        raw_ts = item.get("publish_time")
+        if raw_ts is None:
+            return None
 
         try:
-            response = query.execute()
+            ts = float(raw_ts)
+        except (TypeError, ValueError):
+            return None
 
-            # 手动过滤日期
-            filtered_data = []
-            for item in response.data:
-                pub_time = item.get("publish_time")
-                if pub_time:
-                    # 处理两种时间戳格式
-                    ts = pub_time if pub_time < 10000000000 else pub_time / 1000
-                    try:
-                        dt = datetime.fromtimestamp(ts)
-                        if dt.date() == target_date:
-                            filtered_data.append(item)
-                    except:
-                        pass
+        if ts > 10_000_000_000:
+            ts /= 1000
 
-            print(f"   Loaded {len(filtered_data)} items from {platform or 'all platforms'}")
-            return filtered_data
+        try:
+            return datetime.fromtimestamp(ts).date()
+        except (OverflowError, OSError, ValueError):
+            return None
 
-        except Exception as e:
-            print(f"❌ Error loading contents: {e}")
-            return []
+    @staticmethod
+    def _is_official(item: Dict[str, Any]) -> bool:
+        source_keyword = (item.get("source_keyword") or "").strip()
+        return source_keyword.startswith("@")
+
+    # ==================== Contents ====================
+
+    def get_all_contents(self, platform: Optional[str] = None) -> List[Dict[str, Any]]:
+        items = self._fetch_feed_all(platform=platform)
+        print(f"   Loaded {len(items)} items from {platform or 'all platforms'}")
+        return items
+
+    def get_contents_by_date(self, target_date: date, platform: Optional[str] = None) -> List[Dict[str, Any]]:
+        items = self._fetch_feed_all(platform=platform)
+        filtered = [it for it in items if self._publish_date(it) == target_date]
+        print(f"   Loaded {len(filtered)} items from {platform or 'all platforms'}")
+        return filtered
 
     def get_contents_by_date_range(
         self,
         start_date: date,
         end_date: date,
-        platform: Optional[str] = None
-    ) -> List[Dict]:
-        """查询日期范围的内容"""
-        start_ts = int(datetime.combine(start_date, datetime.min.time()).timestamp())
-        end_ts = int(datetime.combine(end_date, datetime.max.time()).timestamp())
-
-        query = self.client.table("sentiment_contents")\
-            .select("*")\
-            .gte("publish_time", start_ts)\
-            .lte("publish_time", end_ts)
-
-        if platform:
-            query = query.eq("platform", platform)
-
-        try:
-            response = query.execute()
-            return response.data
-        except Exception as e:
-            print(f"❌ Error loading contents: {e}")
-            return []
+        platform: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
+        items = self._fetch_feed_all(platform=platform)
+        filtered: List[Dict[str, Any]] = []
+        for item in items:
+            item_date = self._publish_date(item)
+            if item_date is None:
+                continue
+            if start_date <= item_date <= end_date:
+                filtered.append(item)
+        return filtered
 
     def get_contents_by_keyword(
         self,
         keyword: str,
         start_date: Optional[date] = None,
-        limit: int = 100
-    ) -> List[Dict]:
-        """查询包含特定关键词的内容"""
-        query = self.client.table("sentiment_contents")\
-            .select("*")\
-            .eq("source_keyword", keyword)\
-            .order("publish_time", desc=True)\
-            .limit(limit)
+        limit: int = 100,
+    ) -> List[Dict[str, Any]]:
+        items = self._fetch_feed_all()
+        filtered = [it for it in items if (it.get("source_keyword") or "").strip() == keyword]
 
         if start_date:
-            start_ts = int(datetime.combine(start_date, datetime.min.time()).timestamp())
-            query = query.gte("publish_time", start_ts)
+            filtered = [it for it in filtered if (self._publish_date(it) and self._publish_date(it) >= start_date)]
 
-        try:
-            response = query.execute()
-            return response.data
-        except Exception as e:
-            print(f"❌ Error loading by keyword: {e}")
-            return []
+        return filtered[:limit]
 
-    # ==================== 评论数据操作 ====================
+    # ==================== Comments ====================
 
-    def get_comments_by_content_ids(
-        self,
-        content_ids: List[str]
-    ) -> Dict[str, List[Dict]]:
-        """
-        获取指定内容的评论
-
-        Returns:
-            {content_id: [comment1, comment2, ...]}
-        """
+    def get_comments_by_content_ids(self, content_ids: List[str]) -> Dict[str, List[Dict[str, Any]]]:
         if not content_ids:
             return {}
 
-        try:
-            response = self.client.table("sentiment_comments")\
-                .select("*")\
-                .in_("content_id", content_ids)\
-                .execute()
+        comments_by_content: Dict[str, List[Dict[str, Any]]] = {}
+        unique_ids = list(dict.fromkeys(cid for cid in content_ids if cid))
 
-            # 按content_id分组
-            comments_by_content = {}
-            for comment in response.data:
-                content_id = comment.get("content_id")
-                if content_id not in comments_by_content:
-                    comments_by_content[content_id] = []
-                comments_by_content[content_id].append(comment)
+        if len(unique_ids) > self.max_detail_requests:
+            print(
+                "⚠️  Content detail requests truncated by max_detail_requests: "
+                f"fetched={self.max_detail_requests}, requested={len(unique_ids)}"
+            )
+            unique_ids = unique_ids[: self.max_detail_requests]
 
-            return comments_by_content
-        except Exception as e:
-            print(f"❌ Error loading comments: {e}")
-            return {}
+        for content_id in unique_ids:
+            encoded_content_id = quote(str(content_id), safe="")
+            payload = self._get(f"/sentiment/content/{encoded_content_id}")
+            if payload is None:
+                comments_by_content[content_id] = []
+                continue
 
-    # ==================== 数据转换 ====================
+            comments = payload.get("comments")
+            if comments is None and isinstance(payload.get("data"), dict):
+                comments = payload["data"].get("comments")
+            if comments is None:
+                comments = []
+            comments_by_content[content_id] = comments
 
-    def convert_to_legacy_format(self, items: List[Dict], platform: str) -> List[Dict]:
-        """
-        将Supabase数据转换为原有格式（向后兼容）
+        return comments_by_content
 
-        Args:
-            items: Supabase数据
-            platform: 平台标识
+    # ==================== Data Conversion ====================
 
-        Returns:
-            兼容旧格式的数据列表
-        """
-        converted = []
+    def convert_to_legacy_format(self, items: List[Dict[str, Any]], platform: str) -> List[Dict[str, Any]]:
+        converted: List[Dict[str, Any]] = []
+        platform_norm = self._normalize_platform(platform)
 
         for item in items:
-            if platform == "xhs":
+            p = self._normalize_platform(item.get("platform"))
+            if platform_norm and p != platform_norm:
+                continue
+
+            publish_time = item.get("publish_time", 0) or 0
+            # Keep legacy behavior: xhs expects ms, others mostly seconds.
+            publish_time_seconds = int(publish_time / 1000) if publish_time > 10_000_000_000 else int(publish_time)
+
+            if p == "xhs":
                 converted_item = {
                     "note_id": item.get("content_id"),
                     "type": item.get("content_type", "normal"),
-                    "title": item.get("title", ""),
-                    "desc": item.get("description", ""),
-                    "note_url": item.get("content_url", ""),
-                    "time": item.get("publish_time", 0) * 1000,  # 转换为毫秒
-                    "user_id": item.get("user_id", ""),
-                    "nickname": item.get("nickname", ""),
-                    "avatar": item.get("avatar", ""),
-                    "liked_count": str(item.get("liked_count", 0)),
-                    "comment_count": str(item.get("comment_count", 0)),
-                    "share_count": str(item.get("share_count", 0)),
-                    "collected_count": str(item.get("collected_count", 0)),
-                    "tag_list": "",  # 从platform_data提取
-                    "ip_location": item.get("ip_location", ""),
-                    "source_keyword": item.get("source_keyword", ""),
+                    "title": item.get("title", "") or "",
+                    "desc": item.get("description", "") or "",
+                    "note_url": item.get("content_url", "") or "",
+                    "time": publish_time if publish_time > 10_000_000_000 else publish_time * 1000,
+                    "user_id": item.get("user_id", "") or "",
+                    "nickname": item.get("nickname", "") or "",
+                    "avatar": item.get("avatar", "") or "",
+                    "liked_count": str(item.get("liked_count", 0) or 0),
+                    "comment_count": str(item.get("comment_count", 0) or 0),
+                    "share_count": str(item.get("share_count", 0) or 0),
+                    "collected_count": str(item.get("collected_count", 0) or 0),
+                    "tag_list": (item.get("platform_data") or {}).get("tag_list", ""),
+                    "ip_location": item.get("ip_location", "") or "",
+                    "source_keyword": item.get("source_keyword", "") or "",
                 }
-
-            elif platform == "dy" or platform == "douyin":
+            elif p == "dy":
                 converted_item = {
                     "aweme_id": item.get("content_id"),
                     "aweme_type": "0" if item.get("content_type") == "video" else "1",
-                    "title": item.get("title", ""),
-                    "desc": item.get("description", ""),
-                    "aweme_url": item.get("content_url", ""),
-                    "create_time": item.get("publish_time", 0),
-                    "user_id": item.get("user_id", ""),
-                    "nickname": item.get("nickname", ""),
-                    "avatar": item.get("avatar", ""),
-                    "liked_count": str(item.get("liked_count", 0)),
-                    "comment_count": str(item.get("comment_count", 0)),
-                    "share_count": str(item.get("share_count", 0)),
-                    "collected_count": str(item.get("collected_count", 0)),
+                    "title": item.get("title", "") or "",
+                    "desc": item.get("description", "") or "",
+                    "aweme_url": item.get("content_url", "") or "",
+                    "create_time": publish_time_seconds,
+                    "user_id": item.get("user_id", "") or "",
+                    "nickname": item.get("nickname", "") or "",
+                    "avatar": item.get("avatar", "") or "",
+                    "liked_count": str(item.get("liked_count", 0) or 0),
+                    "comment_count": str(item.get("comment_count", 0) or 0),
+                    "share_count": str(item.get("share_count", 0) or 0),
+                    "collected_count": str(item.get("collected_count", 0) or 0),
                 }
-
-            elif platform == "bili":
+            elif p == "bili":
                 converted_item = {
                     "video_id": item.get("content_id"),
-                    "video_type": item.get("content_type", "video"),
-                    "title": item.get("title", ""),
-                    "desc": item.get("description", ""),
-                    "video_url": item.get("content_url", ""),
-                    "create_time": item.get("publish_time", 0),
-                    "user_id": item.get("user_id", ""),
-                    "nickname": item.get("nickname", ""),
-                    "liked_count": str(item.get("liked_count", 0)),
-                    "video_comment": str(item.get("comment_count", 0)),
-                    "video_share_count": str(item.get("share_count", 0)),
-                    "video_favorite_count": str(item.get("collected_count", 0)),
-                    "video_play_count": str(item.get("platform_data", {}).get("video_play_count", 0)),
+                    "video_type": item.get("content_type", "video") or "video",
+                    "title": item.get("title", "") or "",
+                    "desc": item.get("description", "") or "",
+                    "video_url": item.get("content_url", "") or "",
+                    "create_time": publish_time_seconds,
+                    "user_id": item.get("user_id", "") or "",
+                    "nickname": item.get("nickname", "") or "",
+                    "liked_count": str(item.get("liked_count", 0) or 0),
+                    "video_comment": str(item.get("comment_count", 0) or 0),
+                    "video_share_count": str(item.get("share_count", 0) or 0),
+                    "video_favorite_count": str(item.get("collected_count", 0) or 0),
+                    "video_play_count": str((item.get("platform_data") or {}).get("video_play_count", 0) or 0),
                 }
-
-            elif platform == "wb":
+            elif p in {"wb", "weibo"}:
                 converted_item = {
                     "mblog_id": item.get("content_id"),
-                    "mblog_text": item.get("description", ""),
-                    "mblog_url": item.get("content_url", ""),
-                    "mblog_created_at": item.get("publish_time", 0),
-                    "user_id": item.get("user_id", ""),
-                    "nickname": item.get("nickname", ""),
-                    "avatar": item.get("avatar", ""),
-                    "attitudes_count": str(item.get("liked_count", 0)),
-                    "comments_count": str(item.get("comment_count", 0)),
-                    "reposts_count": str(item.get("share_count", 0)),
+                    "mblog_text": item.get("description", "") or "",
+                    "mblog_url": item.get("content_url", "") or "",
+                    "mblog_created_at": publish_time_seconds,
+                    "user_id": item.get("user_id", "") or "",
+                    "nickname": item.get("nickname", "") or "",
+                    "avatar": item.get("avatar", "") or "",
+                    "attitudes_count": str(item.get("liked_count", 0) or 0),
+                    "comments_count": str(item.get("comment_count", 0) or 0),
+                    "reposts_count": str(item.get("share_count", 0) or 0),
                 }
-
             else:
                 continue
 
@@ -270,126 +310,60 @@ class SentimentSupabaseClient:
 
         return converted
 
-    def get_official_account_contents(self, platform: Optional[str] = None) -> List[Dict]:
-        """
-        获取官方账号来源的内容（source_keyword 以 @ 开头）
+    # ==================== Skill-specific data loaders ====================
 
-        Args:
-            platform: 平台过滤 (xhs, douyin, bili, wb)，None 表示全平台
+    def get_official_account_contents(self, platform: Optional[str] = None) -> List[Dict[str, Any]]:
+        rows = self._fetch_feed_all(platform=platform)
+        official = [row for row in rows if self._is_official(row)]
+        print(f"   Loaded {len(official)} official account items from {platform or 'all platforms'}")
+        return official
 
-        Returns:
-            内容列表
-        """
-        query = self.client.table("sentiment_contents").select("*").like("source_keyword", "@%")
+    def get_keyword_search_contents(self, platform: Optional[str] = None) -> List[Dict[str, Any]]:
+        rows = self._fetch_feed_all(platform=platform)
+        keyword_rows = [row for row in rows if not self._is_official(row)]
+        print(f"   Loaded {len(keyword_rows)} keyword search items from {platform or 'all platforms'}")
+        return keyword_rows
 
-        if platform:
-            query = query.eq("platform", platform)
+    # ==================== Aggregate helpers ====================
 
-        try:
-            response = query.execute()
-            print(f"   Loaded {len(response.data)} official account items from {platform or 'all platforms'}")
-            return response.data
-        except Exception as e:
-            print(f"❌ Error loading official account contents: {e}")
-            return []
-
-    def get_keyword_search_contents(self, platform: Optional[str] = None) -> List[Dict]:
-        """
-        获取关键词搜索来源的内容（source_keyword 不以 @ 开头）
-
-        Args:
-            platform: 平台过滤 (xhs, douyin, bili, wb)，None 表示全平台
-
-        Returns:
-            内容列表
-        """
-        query = self.client.table("sentiment_contents").select("*").not_.like("source_keyword", "@%")
-
-        if platform:
-            query = query.eq("platform", platform)
-
-        try:
-            response = query.execute()
-            print(f"   Loaded {len(response.data)} keyword search items from {platform or 'all platforms'}")
-            return response.data
-        except Exception as e:
-            print(f"❌ Error loading keyword search contents: {e}")
-            return []
-
-    # ==================== 统计查询 ====================
-
-    def get_platform_stats(
-        self,
-        start_date: date,
-        end_date: date
-    ) -> Dict[str, int]:
-        """获取平台分布统计"""
+    def get_platform_stats(self, start_date: date, end_date: date) -> Dict[str, int]:
         contents = self.get_contents_by_date_range(start_date, end_date)
-
-        stats = {}
+        stats: Dict[str, int] = {}
         for item in contents:
             platform = item.get("platform", "unknown")
             stats[platform] = stats.get(platform, 0) + 1
-
         return stats
 
-    def get_top_contents(
-        self,
-        start_date: date,
-        end_date: date,
-        limit: int = 10
-    ) -> List[Dict]:
-        """获取高互动内容"""
+    def get_top_contents(self, start_date: date, end_date: date, limit: int = 10) -> List[Dict[str, Any]]:
         contents = self.get_contents_by_date_range(start_date, end_date)
-
-        # 计算总互动量
         for item in contents:
             item["total_engagement"] = (
-                item.get("liked_count", 0) +
-                item.get("comment_count", 0) +
-                item.get("share_count", 0) +
-                item.get("collected_count", 0)
+                (item.get("liked_count") or 0)
+                + (item.get("comment_count") or 0)
+                + (item.get("share_count") or 0)
+                + (item.get("collected_count") or 0)
             )
 
-        # 排序并返回top N
-        sorted_contents = sorted(
-            contents,
-            key=lambda x: x["total_engagement"],
-            reverse=True
-        )
-
+        sorted_contents = sorted(contents, key=lambda x: x["total_engagement"], reverse=True)
         return sorted_contents[:limit]
 
 
 if __name__ == "__main__":
-    # 测试
     print("=" * 70)
-    print("Testing Supabase Client")
+    print("Testing Sentiment API Client")
     print("=" * 70)
 
-    import os
-    config = {
-        "supabase": {
-            "url": os.environ.get("SUPABASE_URL", ""),
-            "key": os.environ.get("SUPABASE_KEY", "")
-        }
-    }
-
-    client = SentimentSupabaseClient(config)
-
-    # 测试查询
+    client = SentimentSupabaseClient({})
     today = date.today()
-    yesterday = today - timedelta(days=1)
 
-    print(f"\n📊 Testing query for {yesterday}...")
-    contents = client.get_contents_by_date(yesterday)
+    print(f"\n📊 Testing query for {today}...")
+    contents = client.get_contents_by_date(today)
     print(f"   Found {len(contents)} items")
 
     if contents:
-        print(f"\n📝 Sample item:")
         sample = contents[0]
-        print(f"   Platform: {sample.get('platform')}")
-        print(f"   Title: {sample.get('title', '')[:60]}...")
-        print(f"   URL: {sample.get('content_url', '')[:60]}...")
+        print(f"\n📝 Sample item platform: {sample.get('platform')}")
+        print(f"   Title: {(sample.get('title') or '')[:60]}...")
+        print(f"   URL: {(sample.get('content_url') or '')[:60]}...")
 
     print("\n✅ Test complete!")
