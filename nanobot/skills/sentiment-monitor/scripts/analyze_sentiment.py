@@ -65,6 +65,7 @@ def normalize_platform_data(raw_data: List[Dict], platform: str) -> List[Dict]:
                         "collects": int(item.get("collected_count", "0") or "0")
                     },
                     "tags": [tag.strip() for tag in item.get("tag_list", "").split(",") if tag.strip()],
+                    "source_keyword": item.get("source_keyword", ""),
                     "raw": item
                 }
 
@@ -89,6 +90,7 @@ def normalize_platform_data(raw_data: List[Dict], platform: str) -> List[Dict]:
                         "collects": int(item.get("collected_count", "0") or "0")
                     },
                     "tags": [],
+                    "source_keyword": item.get("source_keyword", ""),
                     "raw": item
                 }
 
@@ -114,6 +116,7 @@ def normalize_platform_data(raw_data: List[Dict], platform: str) -> List[Dict]:
                         "comments": int(item.get("video_comment", "0") or "0")
                     },
                     "tags": [],
+                    "source_keyword": item.get("source_keyword", ""),
                     "raw": item
                 }
 
@@ -137,6 +140,7 @@ def normalize_platform_data(raw_data: List[Dict], platform: str) -> List[Dict]:
                         "shares": int(item.get("reposts_count", "0") or "0")
                     },
                     "tags": [],
+                    "source_keyword": item.get("source_keyword", ""),
                     "raw": item
                 }
 
@@ -222,6 +226,11 @@ def detect_risks(items: List[Dict], config: Dict) -> List[Dict]:
 
         content = item["content"]
         matched_keywords = [kw for kw in risk_keywords if kw in content]
+        if not matched_keywords and item["sentiment"]["label"] == "negative":
+            matched_keywords = [
+                kw for kw in config["sentiment_keywords"]["negative"]
+                if kw in content
+            ][:3]
 
         if not matched_keywords:
             continue
@@ -243,7 +252,9 @@ def detect_risks(items: List[Dict], config: Dict) -> List[Dict]:
             "severity": severity,
             "keywords": matched_keywords,
             "engagement": engagement_total,
-            "reason": f"检测到风险关键词: {', '.join(matched_keywords[:3])}"
+            "risk_type": classify_risk_type(content, config),
+            "reason": f"检测到风险关键词: {', '.join(matched_keywords[:3])}",
+            "relevance_reason": item.get("entity_match", {}).get("relevance_reason", "")
         })
 
     # Sort by severity (high first) then engagement (high first)
@@ -529,6 +540,159 @@ def normalize_raw_supabase_items(items: List[Dict]) -> List[Dict]:
     return normalized
 
 
+def _build_item_text(item: Dict[str, Any]) -> str:
+    parts: List[str] = [
+        item.get("title", "") or "",
+        item.get("content", "") or "",
+        item.get("source_keyword", "") or "",
+    ]
+    author_name = (item.get("author") or {}).get("name", "") or ""
+    if author_name:
+        parts.append(author_name)
+    parts.extend(tag for tag in item.get("tags", []) if tag)
+    return " ".join(part for part in parts if part).strip()
+
+
+def _normalize_entities(matches: List[Dict[str, str]]) -> List[Dict[str, str]]:
+    seen = set()
+    ordered: List[Dict[str, str]] = []
+    for match in matches:
+        key = match["key"]
+        if key in seen:
+            continue
+        seen.add(key)
+        ordered.append(match)
+    return ordered
+
+
+def classify_entity_match(item: Dict[str, Any], config: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    判定帖子是否与主监控机构/兄弟机构高相关。
+
+    返回:
+      {
+        "primary_entities": [...],
+        "benchmark_entities": [...],
+        "relevance_level": "high" | "low" | "none",
+        "relevance_reason": "...",
+      }
+    """
+    entities = config.get("institution_entities", {})
+    text = _build_item_text(item)
+    source_keyword = (item.get("source_keyword") or "").strip()
+
+    primary_matches: List[Dict[str, str]] = []
+    benchmark_matches: List[Dict[str, str]] = []
+    low_confidence_reasons: List[str] = []
+
+    for key, entity in entities.items():
+        display_name = entity.get("display_name", key)
+        role = entity.get("role", "primary")
+        reasons: List[str] = []
+        high_confidence = False
+
+        for alias in entity.get("strict_aliases", []):
+            alias = (alias or "").strip()
+            if not alias:
+                continue
+            if alias in source_keyword:
+                reasons.append(f"source_keyword 直接命中 {alias}")
+                high_confidence = True
+                break
+            if alias in text:
+                reasons.append(f"标题/正文直接提及 {alias}")
+                high_confidence = True
+                break
+
+        if not high_confidence:
+            contextual_hits = [
+                alias for alias in entity.get("contextual_aliases", [])
+                if alias and alias in text
+            ]
+            context_terms = [
+                term for term in entity.get("context_terms", [])
+                if term and term in text
+            ]
+            if contextual_hits and context_terms:
+                reasons.append(f"别名 {contextual_hits[0]} 与上下文 {context_terms[0]} 共现")
+                high_confidence = True
+            elif contextual_hits:
+                low_confidence_reasons.append(
+                    f"{display_name} 仅命中别名 {contextual_hits[0]}，上下文不足"
+                )
+
+        if not reasons:
+            continue
+
+        match_payload = {
+            "key": key,
+            "display_name": display_name,
+            "reason": reasons[0],
+        }
+        if high_confidence:
+            if role == "benchmark":
+                benchmark_matches.append(match_payload)
+            else:
+                primary_matches.append(match_payload)
+
+    primary_matches = _normalize_entities(primary_matches)
+    benchmark_matches = _normalize_entities(benchmark_matches)
+
+    if primary_matches or benchmark_matches:
+        all_reasons = [m["reason"] for m in primary_matches + benchmark_matches]
+        return {
+            "primary_entities": primary_matches,
+            "benchmark_entities": benchmark_matches,
+            "relevance_level": "high",
+            "relevance_reason": "；".join(all_reasons),
+        }
+
+    if low_confidence_reasons:
+        return {
+            "primary_entities": [],
+            "benchmark_entities": [],
+            "relevance_level": "low",
+            "relevance_reason": "；".join(low_confidence_reasons),
+        }
+
+    return {
+        "primary_entities": [],
+        "benchmark_entities": [],
+        "relevance_level": "none",
+        "relevance_reason": "",
+    }
+
+
+def classify_risk_type(text: str, config: Dict[str, Any]) -> str:
+    """将负面内容归类为可执行处理类型。"""
+    for risk_type, keywords in config.get("risk_type_keywords", {}).items():
+        if any(keyword in text for keyword in keywords):
+            return risk_type
+    return "待研判"
+
+
+def deduplicate_items(items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """按平台 + 原始链接去重，缺少链接时退化为标题/内容摘要。"""
+    deduped: List[Dict[str, Any]] = []
+    seen = set()
+    sorted_items = sorted(
+        items,
+        key=lambda x: (x.get("publish_time", 0) or x.get("created_at", 0) or 0),
+        reverse=True,
+    )
+
+    for item in sorted_items:
+        dedupe_key = (
+            item.get("platform", ""),
+            item.get("url") or item.get("title") or item.get("content", "")[:80],
+        )
+        if dedupe_key in seen:
+            continue
+        seen.add(dedupe_key)
+        deduped.append(item)
+    return deduped
+
+
 def extract_comment_themes(comments: List[Dict], config: Dict, top_n: int = 5) -> List[Dict]:
     """
     从评论列表中提取高频主题关键词，附代表性评论。
@@ -662,11 +826,19 @@ def analyze_account_data(
 
 
 def classify_competitor(text: str, config: Dict) -> str:
-    """判断内容属于哪个机构"""
-    competitor_keywords = config.get("competitor_keywords", {})
-    for org, keywords in competitor_keywords.items():
-        if any(kw in text for kw in keywords):
-            return org
+    """向后兼容：基于机构实体配置判断内容属于哪个机构。"""
+    probe_item = {
+        "title": "",
+        "content": text,
+        "source_keyword": "",
+        "author": {},
+        "tags": [],
+    }
+    entity_match = classify_entity_match(probe_item, config)
+    if entity_match["primary_entities"]:
+        return entity_match["primary_entities"][0]["key"]
+    if entity_match["benchmark_entities"]:
+        return entity_match["benchmark_entities"][0]["key"]
     return "unknown"
 
 
@@ -712,7 +884,7 @@ def analyze_all_data(
         normalized = normalize_platform_data(raw_items, platform)
         all_items.extend(normalized)
 
-    # Classify sentiment and competitor for all items
+    # Classify sentiment and institution relevance for all items
     for item in all_items:
         label, score, confidence = classify_sentiment(item["content"], config)
         item["sentiment"] = {
@@ -720,7 +892,24 @@ def analyze_all_data(
             "score": score,
             "confidence": confidence
         }
+        item["entity_match"] = classify_entity_match(item, config)
         item["competitor"] = classify_competitor(item["content"], config)
+        item["risk_type"] = classify_risk_type(item["content"], config)
+
+    primary_items = deduplicate_items([
+        item for item in all_items
+        if item.get("entity_match", {}).get("primary_entities")
+        and item.get("entity_match", {}).get("relevance_level") == "high"
+    ])
+    benchmark_items = deduplicate_items([
+        item for item in all_items
+        if item.get("entity_match", {}).get("benchmark_entities")
+        and item.get("entity_match", {}).get("relevance_level") == "high"
+    ])
+    low_relevance_items = [
+        item for item in all_items
+        if item.get("entity_match", {}).get("relevance_level") == "low"
+    ]
 
     # ==================== 关联和分析评论数据 ====================
     comments_analysis = {
@@ -731,7 +920,8 @@ def analyze_all_data(
     
     if comments_data:
         print(f"   Processing {sum(len(v) for v in comments_data.values())} comments...")
-        for item in all_items:
+        relevant_items = primary_items + benchmark_items
+        for item in relevant_items:
             # 为每个item关联评论
             item_id = item.get("id", "")
             item_comments = comments_data.get(item_id, [])
@@ -769,22 +959,22 @@ def analyze_all_data(
                 item["comment_sentiment_dist"] = {"positive": 0, "neutral": 0, "negative": 0}
 
     # Perform analysis
-    metrics = aggregate_metrics(all_items)
-    risks = detect_risks(all_items, config)
-    topics = extract_trending_topics(all_items)
-    kols = identify_kols(all_items, config)
+    metrics = aggregate_metrics(primary_items)
+    risks = detect_risks(primary_items, config)
+    topics = extract_trending_topics(primary_items)
+    kols = identify_kols(primary_items, config)
 
     # Platform-specific analysis
     platform_analysis = {}
     for platform in config["platforms"]:
-        platform_items = [item for item in all_items if item["platform"] == platform]
+        platform_items = [item for item in primary_items if item["platform"] == platform]
         platform_analysis[platform] = analyze_platform_data(platform_items, config)
 
     # 计算数据日期范围
     data_date_label = "全量数据"
-    if all_items:
+    if primary_items or benchmark_items:
         timestamps = [
-            item["created_at"] for item in all_items
+            item["created_at"] for item in (primary_items + benchmark_items)
             if item.get("created_at") and item["created_at"] > 0
         ]
         if timestamps:
@@ -799,34 +989,70 @@ def analyze_all_data(
 
     # 竞品对比分析
     competitor_analysis = {}
-    competitor_keywords = config.get("competitor_keywords", {})
-    for org in competitor_keywords.keys():
-        org_items = [item for item in all_items if item.get("competitor") == org]
-        if org_items:
-            org_sentiment = Counter(item["sentiment"]["label"] for item in org_items)
-            org_total = len(org_items)
-            competitor_analysis[org] = {
-                "total": org_total,
-                "sentiment_dist": dict(org_sentiment),
-                "sentiment_pct": {k: round(v/org_total*100, 1) for k, v in org_sentiment.items()},
-                "avg_engagement": round(sum(sum(item["engagement"].values()) for item in org_items) / org_total, 1) if org_total > 0 else 0,
-                "items": org_items
-            }
+    entity_cfg = config.get("institution_entities", {})
+    benchmark_keys = config.get("report_targets", {}).get("benchmark", [])
+    for org in benchmark_keys:
+        org_items = [
+            item for item in benchmark_items
+            if any(match["key"] == org for match in item.get("entity_match", {}).get("benchmark_entities", []))
+        ]
+        if not org_items:
+            continue
+
+        org_sentiment = Counter(item["sentiment"]["label"] for item in org_items)
+        org_total = len(org_items)
+        org_risks = detect_risks(org_items, config)
+        sorted_items = sorted(
+            org_items,
+            key=lambda x: sum(x["engagement"].values()),
+            reverse=True,
+        )
+        competitor_analysis[org] = {
+            "display_name": entity_cfg.get(org, {}).get("display_name", org),
+            "total": org_total,
+            "sentiment_dist": dict(org_sentiment),
+            "sentiment_pct": {k: round(v / org_total * 100, 1) for k, v in org_sentiment.items()},
+            "avg_engagement": round(
+                sum(sum(item["engagement"].values()) for item in org_items) / org_total, 1
+            ) if org_total > 0 else 0,
+            "items": sorted_items,
+            "risks": org_risks,
+            "top_negative_items": [
+                item for item in sorted_items
+                if item["sentiment"]["label"] == "negative"
+            ][:3],
+        }
 
     return {
         "metadata": {
             "analysis_date": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             "total_platforms": len(all_data),
-            "data_date": data_date_label
+            "data_date": data_date_label,
+            "primary_targets": [
+                entity_cfg.get(key, {}).get("display_name", key)
+                for key in config.get("report_targets", {}).get("primary", [])
+            ],
+            "benchmark_targets": [
+                entity_cfg.get(key, {}).get("display_name", key)
+                for key in benchmark_keys
+            ],
         },
         "metrics": metrics,
         "risks": risks,
         "topics": topics[:10],
         "kols": kols,
         "platform_analysis": platform_analysis,
-        "all_items": all_items,
+        "all_items": primary_items,
+        "benchmark_items": benchmark_items,
+        "all_items_raw": all_items,
         "comments_analysis": comments_analysis,
-        "competitor_analysis": competitor_analysis
+        "competitor_analysis": competitor_analysis,
+        "relevance_summary": {
+            "primary_items": len(primary_items),
+            "benchmark_items": len(benchmark_items),
+            "low_relevance_items": len(low_relevance_items),
+            "discarded_items": max(0, len(all_items) - len(primary_items) - len(benchmark_items)),
+        }
     }
 
 

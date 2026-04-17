@@ -270,7 +270,7 @@ def main():
     print("=" * 70)
 
     try:
-        print("🔄 Generating dual-dimension report...")
+        print("🔄 Generating focused sentiment action report...")
         combined_analysis = {
             "metadata": {
                 "analysis_date": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
@@ -306,33 +306,31 @@ def main():
         print("=" * 70)
 
         max_chars = 5500 if args.mode == "fast" else 8000
-        require_dual_dimensions = account_analysis is not None and fullvolume_analysis is not None
         require_action_checklist = fullvolume_analysis is not None
-        has_account_priority_items = bool(
-            account_analysis
-            and any(acc.get("top_posts") for acc in account_analysis.get("accounts", []))
-        )
-        has_fullvolume_priority_items = bool(
+        require_priority = bool(
             fullvolume_analysis
             and (
                 fullvolume_analysis.get("risks")
-                or any(
-                    item.get("sentiment", {}).get("label") == "positive"
-                    for item in fullvolume_analysis.get("all_items", [])
-                )
+                or fullvolume_analysis.get("competitor_analysis")
             )
         )
-        require_priority = has_account_priority_items or has_fullvolume_priority_items
         require_links = require_priority
 
         errors, metrics = validate_report_text(
             report,
             require_priority=require_priority,
             require_links=require_links,
-            require_dual_dimensions=require_dual_dimensions,
+            require_dual_dimensions=False,
             require_action_checklist=require_action_checklist,
+            require_primary_monitoring=bool(fullvolume_analysis),
+            require_benchmark_section=bool(
+                fullvolume_analysis and fullvolume_analysis.get("competitor_analysis")
+            ),
+            require_relevance_reasons=bool(
+                fullvolume_analysis and fullvolume_analysis.get("risks")
+            ),
             max_chars=max_chars,
-            allow_missing_links=3,
+            allow_missing_links=0,
         )
         if errors:
             print("❌ Report validation failed:", file=sys.stderr)

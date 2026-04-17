@@ -24,6 +24,10 @@ TOP_POST_PRIORITY_RE = re.compile(r"^\d+\.\s+\[P[123]\]\s+《", re.MULTILINE)
 OPPORTUNITY_PRIORITY_RE = re.compile(r"^\d+\.\s+\[P[123]\]\s+\*\*《", re.MULTILINE)
 RISK_PRIORITY_RE = re.compile(r"^####\s+P[123]\s+/", re.MULTILINE)
 CHECKLIST_ITEM_RE = re.compile(r"^\s*-\s+\[\s\]\s+", re.MULTILINE)
+PRIMARY_CASE_SECTION_RE = re.compile(r"##\s+二、我方高相关负面案例")
+BENCHMARK_SECTION_RE = re.compile(r"##\s+三、兄弟机构对比")
+RELEVANCE_REASON_RE = re.compile(r"高相关依据：")
+NO_PRIMARY_HIT_RE = re.compile(r"未发现满足高相关门槛的负面帖子")
 
 
 def _to_bool(value: str) -> bool:
@@ -37,6 +41,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--require-links", default="true", choices=["true", "false"])
     parser.add_argument("--require-dual-dimensions", default="false", choices=["true", "false"])
     parser.add_argument("--require-action-checklist", default="true", choices=["true", "false"])
+    parser.add_argument("--require-primary-monitoring", default="false", choices=["true", "false"])
+    parser.add_argument("--require-benchmark-section", default="false", choices=["true", "false"])
+    parser.add_argument("--require-relevance-reasons", default="false", choices=["true", "false"])
     parser.add_argument("--max-chars", type=int, default=8000)
     parser.add_argument("--allow-missing-links", type=int, default=0)
     return parser.parse_args()
@@ -64,6 +71,9 @@ def validate_report_text(
     require_links: bool = True,
     require_dual_dimensions: bool = False,
     require_action_checklist: bool = True,
+    require_primary_monitoring: bool = False,
+    require_benchmark_section: bool = False,
+    require_relevance_reasons: bool = False,
     max_chars: int = 8000,
     allow_missing_links: int = 0,
 ) -> Tuple[List[str], Dict[str, int]]:
@@ -79,6 +89,8 @@ def validate_report_text(
     missing_link_marks = MISSING_LINK_RE.findall(body)
     link_required_priority_items = _count_link_required_priority_items(body)
     checklist_items = CHECKLIST_ITEM_RE.findall(body)
+    relevance_reasons = RELEVANCE_REASON_RE.findall(body)
+    has_no_primary_hit = bool(NO_PRIMARY_HIT_RE.search(body))
 
     if char_count > max_chars:
         errors.append(f"char_count={char_count} exceeds max={max_chars}")
@@ -106,12 +118,26 @@ def validate_report_text(
             errors.append("missing section: 二、全网舆情洞察")
 
     if require_action_checklist:
-        if "### 2.4 立即执行清单" not in body:
-            errors.append("missing section: 2.4 立即执行清单")
+        if "## 四、立即执行清单" not in body and "### 2.4 立即执行清单" not in body:
+            errors.append("missing section: 立即执行清单")
         elif not checklist_items:
             errors.append("missing actionable checklist items (- [ ])")
         elif len(checklist_items) < 3:
             errors.append(f"checklist items too few: {len(checklist_items)} < 3")
+
+    if require_primary_monitoring and not PRIMARY_CASE_SECTION_RE.search(body):
+        errors.append("missing section: 二、我方高相关负面案例")
+
+    if require_benchmark_section and not BENCHMARK_SECTION_RE.search(body):
+        errors.append("missing section: 三、兄弟机构对比")
+
+    if require_relevance_reasons and not has_no_primary_hit:
+        case_count = len(RISK_PRIORITY_RE.findall(body))
+        if case_count > 0 and len(relevance_reasons) < case_count:
+            errors.append(
+                "relevance reason coverage insufficient: "
+                f"reasons({len(relevance_reasons)}) < cases({case_count})"
+            )
 
     metrics = {
         "char_count": char_count,
@@ -120,6 +146,7 @@ def validate_report_text(
         "missing_link_marks": len(missing_link_marks),
         "link_required_priority_items": link_required_priority_items,
         "checklist_items": len(checklist_items),
+        "relevance_reasons": len(relevance_reasons),
     }
     return errors, metrics
 
@@ -134,6 +161,9 @@ def main() -> int:
         require_links=_to_bool(args.require_links),
         require_dual_dimensions=_to_bool(args.require_dual_dimensions),
         require_action_checklist=_to_bool(args.require_action_checklist),
+        require_primary_monitoring=_to_bool(args.require_primary_monitoring),
+        require_benchmark_section=_to_bool(args.require_benchmark_section),
+        require_relevance_reasons=_to_bool(args.require_relevance_reasons),
         max_chars=args.max_chars,
         allow_missing_links=args.allow_missing_links,
     )
@@ -152,6 +182,7 @@ def main() -> int:
         "missing_link_marks",
         "link_required_priority_items",
         "checklist_items",
+        "relevance_reasons",
     ]:
         print(f"{key}={metrics.get(key, 0)}")
     return 0

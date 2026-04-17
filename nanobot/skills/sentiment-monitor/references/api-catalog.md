@@ -93,16 +93,23 @@
 - `content`
 - `format`
 
-## 6) 调用顺序建议
+## 6) 调用顺序建议（高相关模式）
 
-1. 日报默认路径：先 `GET /api/v1/reports/sentiment/latest`（`days=1` 或 `7`）。
-2. 若需补强可追溯证据：再调用 `GET /api/v1/sentiment/feed` 拉取候选条目。
-3. 对高优先级条目（风险/机会）逐条调用 `GET /api/v1/sentiment/content/{content_id}` 补评论证据。
-4. 若用户指定时间窗：改走 `POST /api/v1/reports/generate`（`dimension=sentiment` + `date_range`）。
-5. 输出前执行 `references/quality-gate.md`，确保 `P1/P2/P3 + 原始链接 + 可执行清单` 完整。
+1. 默认先走 `GET /api/v1/sentiment/feed` 建候选池，而不是先用 `latest report` 当骨架。
+2. 主监控对象候选：
+   - `keyword=北京中关村学院`
+   - `keyword=中关村人工智能研究院`
+3. 兄弟机构对比候选：
+   - `keyword=深圳河套研究院`
+   - `keyword=上海创智研究院`
+4. 对所有准备进入 `P1/P2` 的正式案例，逐条调用 `GET /api/v1/sentiment/content/{content_id}` 补评论和上下文证据。
+5. `GET /api/v1/reports/sentiment/latest` 仅可作为背景线索；即使 `latest.total_items=0`，只要 `feed` 仍有高相关案例，也必须继续生成报告。
+6. 若用户指定时间窗：改走 `POST /api/v1/reports/generate`（`dimension=sentiment` + `date_range`），但最终案例仍需回到 `feed/content` 校验原始链接和高相关性。
+7. 输出前执行 `references/quality-gate.md`，确保高相关、原始链接、可执行动作全部完整。
 
 ## 7) 能力边界提示
 
-- 当前接口未直接提供 `P1/P2/P3` 字段，优先级需由调用方按 query 相关性重排。
+- 当前接口未直接提供 `P1/P2/P3` 字段，优先级需由调用方按严重性、传播性、实体确定性联合重排。
 - 若条目缺少 `content_url`，必须显式标注“原始链接缺失”。
+- 对“中关村两院”“河套研究院”“创智研究院”等别名命中，若上下文不足以确认机构归属，应判定为证据不足并剔除。
 - 接口异常（5xx/超时/连接失败）时，应明确“当前舆情接口暂时不可用”，不要伪造成“未命中”。

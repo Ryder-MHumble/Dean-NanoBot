@@ -19,36 +19,26 @@ from datetime import datetime
 
 MODE_CONFIGS: Dict[str, Dict[str, int]] = {
     "fast": {
-        "account_top_posts_per_account": 3,
-        "topic_suggestions_limit": 4,
-        "exec_actions_limit": 3,
-        "topic_from_trends_limit": 2,
-        "topic_from_competitor_limit": 2,
         "high_risk_limit": 3,
         "medium_risk_limit": 2,
         "risk_title_chars": 60,
         "risk_keywords_per_item": 3,
-        "opportunity_limit": 5,
-        "opportunity_title_chars": 60,
         "checklist_limit": 5,
         "checklist_high_risk_limit": 2,
         "checklist_medium_risk_limit": 1,
+        "benchmark_case_limit": 2,
+        "benchmark_action_limit": 2,
     },
     "standard": {
-        "account_top_posts_per_account": 5,
-        "topic_suggestions_limit": 6,
-        "exec_actions_limit": 5,
-        "topic_from_trends_limit": 3,
-        "topic_from_competitor_limit": 3,
         "high_risk_limit": 4,
         "medium_risk_limit": 3,
         "risk_title_chars": 80,
         "risk_keywords_per_item": 4,
-        "opportunity_limit": 8,
-        "opportunity_title_chars": 80,
         "checklist_limit": 6,
         "checklist_high_risk_limit": 3,
         "checklist_medium_risk_limit": 2,
+        "benchmark_case_limit": 4,
+        "benchmark_action_limit": 3,
     },
 }
 
@@ -102,6 +92,33 @@ def normalize_mode(mode: str) -> str:
     if normalized not in MODE_CONFIGS:
         return "standard"
     return normalized
+
+
+def format_publish_time(item: Dict[str, Any]) -> str:
+    raw_ts = item.get("publish_time") or item.get("created_at") or 0
+    if not raw_ts:
+        return "时间缺失"
+    ts = float(raw_ts)
+    if ts > 10_000_000_000:
+        ts /= 1000
+    return datetime.fromtimestamp(ts).strftime("%Y-%m-%d %H:%M")
+
+
+def get_institution_label(item: Dict[str, Any], group: str = "primary_entities") -> str:
+    matches = item.get("entity_match", {}).get(group, [])
+    if not matches:
+        return "机构待确认"
+    return " / ".join(match["display_name"] for match in matches)
+
+
+def get_relevance_reason(item: Dict[str, Any]) -> str:
+    reason = item.get("entity_match", {}).get("relevance_reason", "")
+    return reason or "仅命中弱相关别名，已转人工复核"
+
+
+def get_action_suggestions(risk_type: str, config: Dict[str, Any]) -> List[str]:
+    templates = config.get("risk_action_templates", {})
+    return templates.get(risk_type, templates.get("待研判", []))
 
 
 # ============================================================
@@ -681,6 +698,222 @@ def _generate_action_checklist(analysis: Dict, mode_config: Dict[str, int]) -> s
     return section
 
 
+def _get_negative_comment_evidence(item: Dict[str, Any]) -> str:
+    comments = item.get("comments", []) or []
+    for comment in comments:
+        if (comment.get("sentiment") or {}).get("label") == "negative":
+            text = comment.get("content", "").strip()
+            if text:
+                return text[:80]
+    return ""
+
+
+def _generate_core_summary(analysis: Dict, mode_config: Dict[str, int]) -> str:
+    risks = analysis.get("risks", [])
+    high_count = len([risk for risk in risks if risk["severity"] == "high"])
+    medium_count = len([risk for risk in risks if risk["severity"] == "medium"])
+    benchmark_analysis = analysis.get("competitor_analysis", {})
+    relevance_summary = analysis.get("relevance_summary", {})
+    metrics = analysis.get("metrics", {})
+
+    section = "## 一、核心结论\n\n"
+    section += (
+        f"- 主监控对象共命中 **{metrics.get('total_items', 0)}** 条高相关帖子，"
+        f"其中 **P1 {high_count} 条 / P2 {medium_count} 条** 需要优先处理。\n"
+    )
+    if not risks:
+        section += "- 未发现满足高相关门槛的负面帖子，本次不使用泛“中关村”内容补位。\n"
+    if benchmark_analysis:
+        section += (
+            f"- 兄弟机构对比已纳入 **{len(benchmark_analysis)}** 个样本池，"
+            "仅用于对比风险处置与舆情主题，不与我方案例混排。\n"
+        )
+    low_relevance = relevance_summary.get("low_relevance_items", 0)
+    discarded = relevance_summary.get("discarded_items", 0)
+    if low_relevance or discarded:
+        section += (
+            f"- 已剔除 **{low_relevance + discarded}** 条低相关或无法确认归属内容，"
+            "避免把泛行业讨论误报为机构舆情。\n"
+        )
+    section += "\n"
+    return section
+
+
+def _format_primary_risk(risk: Dict[str, Any], idx: int, priority: str, config: Dict[str, Any]) -> str:
+    item = risk["item"]
+    title = item["title"][:80] if item.get("title") else item["content"][:80]
+    keywords = "、".join(risk["keywords"][:4])
+    institution = get_institution_label(item, "primary_entities")
+    evidence = _get_negative_comment_evidence(item)
+    text = f"#### {get_risk_priority(priority)} / {institution} / {risk['risk_type']}\n\n"
+    text += f"- 平台：{get_platform_name(item['platform'])}\n"
+    text += f"- 发布时间：{format_publish_time(item)}\n"
+    text += f"- 帖子摘要：《{title}》\n"
+    text += f"- 负面点摘要：{keywords or risk['reason']}\n"
+    text += f"- 高相关依据：{risk.get('relevance_reason') or get_relevance_reason(item)}\n"
+    if item.get("url"):
+        text += f"- 原始链接：[查看原文]({item['url']})\n"
+    else:
+        text += "- 原始链接：原始链接缺失\n"
+    if evidence:
+        text += f"- 评论证据：\"{evidence}\"\n"
+    text += "\n处理建议：\n"
+    for suggestion in get_action_suggestions(risk["risk_type"], config)[:3]:
+        text += f"- {suggestion}\n"
+    text += "\n"
+    return text
+
+
+def _generate_primary_risk_section(analysis: Dict[str, Any], mode_config: Dict[str, int], config: Dict[str, Any]) -> str:
+    risks = analysis.get("risks", [])
+    high = [risk for risk in risks if risk["severity"] == "high"]
+    medium = [risk for risk in risks if risk["severity"] == "medium"]
+
+    section = "## 二、我方高相关负面案例\n\n"
+    if not risks:
+        section += "未发现满足高相关门槛的负面帖子。\n\n"
+        return section
+
+    if high:
+        section += "### 2.1 需立即处理\n\n"
+        for idx, risk in enumerate(high[:mode_config["high_risk_limit"]], 1):
+            section += _format_primary_risk(risk, idx, "high", config)
+
+    if medium:
+        section += "### 2.2 关注跟进\n\n"
+        for idx, risk in enumerate(medium[:mode_config["medium_risk_limit"]], 1):
+            section += _format_primary_risk(risk, idx, "medium", config)
+
+    return section
+
+
+def _benchmark_hint(risk_type: str, org_name: str) -> str:
+    hints = {
+        "招生质疑": f"{org_name} 的招生相关讨论已出现负面反馈，我方应优先检查招生页、FAQ 和报名链路表述。",
+        "虚假宣传": f"{org_name} 的案例说明宣传表述容易被放大，我方应先自查外宣材料与事实是否一一对应。",
+        "培养体验": f"{org_name} 的培养体验争议提示我方需提前解释项目节奏、导师机制和考核方式。",
+        "收费争议": f"{org_name} 的收费争议提醒我方统一收费/奖学金/退款口径，避免评论区二次扩散。",
+        "师资质疑": f"{org_name} 的师资质疑表明履历与导师匹配机制需要更早公开，减少误解。",
+        "管理投诉": f"{org_name} 的管理投诉案例可作为流程复盘样本，帮助我方提前补齐 SLA 和回应机制。",
+    }
+    return hints.get(risk_type, f"{org_name} 的案例可作为同类问题的预警样本，建议我方提前做口径和流程自查。")
+
+
+def _generate_benchmark_section(analysis: Dict[str, Any], mode_config: Dict[str, int]) -> str:
+    benchmark_analysis = analysis.get("competitor_analysis", {})
+    section = "## 三、兄弟机构对比\n\n"
+    if not benchmark_analysis:
+        section += "本次未获取到可用于对比的兄弟机构高相关样本。\n\n"
+        return section
+
+    section += "以下内容仅用于风险处置对标，不作为我方正式舆情案例。\n\n"
+    case_idx = 1
+    for org_key, org_data in benchmark_analysis.items():
+        org_name = org_data.get("display_name", org_key)
+        org_risks = org_data.get("risks", [])
+        org_cases = org_risks[:mode_config["benchmark_case_limit"]]
+        if not org_cases:
+            org_cases = [
+                {
+                    "item": item,
+                    "risk_type": item.get("risk_type", "待研判"),
+                    "severity": "medium",
+                    "keywords": [item.get("risk_type", "待研判")],
+                    "relevance_reason": get_relevance_reason(item),
+                }
+                for item in org_data.get("top_negative_items", [])[:mode_config["benchmark_case_limit"]]
+            ]
+        if not org_cases:
+            continue
+
+        section += f"### 3.{case_idx} {org_name}\n\n"
+        for idx, risk in enumerate(org_cases, 1):
+            item = risk["item"]
+            title = item["title"][:70] if item.get("title") else item["content"][:70]
+            eng = sum(item["engagement"].values())
+            priority = get_rank_priority(idx)
+            section += f"{idx}. [{priority}] **《{title}》**\n"
+            section += f"   - 平台：{get_platform_name(item['platform'])} | 互动：{format_number(eng)} | 类型：{risk['risk_type']}\n"
+            section += f"   - 高相关依据：{risk.get('relevance_reason') or get_relevance_reason(item)}\n"
+            if item.get("url"):
+                section += f"   - 原始链接：[查看原文]({item['url']})\n"
+            else:
+                section += "   - 原始链接：原始链接缺失\n"
+            section += f"   - 对我方启发：{_benchmark_hint(risk['risk_type'], org_name)}\n\n"
+        case_idx += 1
+
+    if case_idx == 1:
+        section += "本次未获取到可用于对比的兄弟机构高相关样本。\n\n"
+    return section
+
+
+def _generate_prioritized_actions(analysis: Dict[str, Any], mode_config: Dict[str, int]) -> str:
+    section = "## 四、立即执行清单\n\n"
+    actions: List[str] = []
+    risks = analysis.get("risks", [])
+    benchmark_analysis = analysis.get("competitor_analysis", {})
+
+    high_risks = [risk for risk in risks if risk["severity"] == "high"]
+    medium_risks = [risk for risk in risks if risk["severity"] == "medium"]
+
+    for risk in high_risks[:mode_config["checklist_high_risk_limit"]]:
+        item = risk["item"]
+        title = item["title"][:25] if item.get("title") else item["content"][:25]
+        url_part = f" → [原始链接]({item['url']})" if item.get("url") else " → 原始链接缺失"
+        actions.append(
+            f"- [ ] **【48h内 / P1】** 核查并回应《{title}...》{url_part}（{risk['risk_type']}）"
+        )
+
+    if len(actions) < mode_config["checklist_limit"]:
+        for risk in medium_risks[:mode_config["checklist_medium_risk_limit"]]:
+            item = risk["item"]
+            title = item["title"][:25] if item.get("title") else item["content"][:25]
+            url_part = f" → [原始链接]({item['url']})" if item.get("url") else " → 原始链接缺失"
+            actions.append(
+                f"- [ ] **【本周内 / P2】** 给《{title}...》准备统一回复口径{url_part}"
+            )
+            if len(actions) >= mode_config["checklist_limit"]:
+                break
+
+    if len(actions) < mode_config["checklist_limit"]:
+        for org_key, org_data in benchmark_analysis.items():
+            org_name = org_data.get("display_name", org_key)
+            org_risks = org_data.get("risks", [])
+            if not org_risks:
+                continue
+            ref_item = org_risks[0]["item"]
+            ref_url = ref_item.get("url")
+            url_part = f" → [参考链接]({ref_url})" if ref_url else ""
+            actions.append(
+                f"- [ ] **【本周内 / P2】** 对照 {org_name} 的「{org_risks[0]['risk_type']}」案例，完成我方同类页面和回复口径自查{url_part}"
+            )
+            if len(actions) >= mode_config["checklist_limit"]:
+                break
+
+    if len(actions) < 3:
+        actions.extend([
+            "- [ ] **【本周内】** 人工复核所有被剔除的低相关样本，持续完善别名白名单与排除词。",
+            "- [ ] **【本周内】** 复盘本周高相关负面案例，沉淀一版招生/培养/管理回应 FAQ。",
+            "- [ ] **【48h内】** 建立“投诉/举报/虚假/退款”关键词二次复核表，避免漏掉高风险帖子。",
+        ][: max(0, 3 - len(actions))])
+
+    for action in actions[:mode_config["checklist_limit"]]:
+        section += action + "\n"
+    section += "\n"
+    return section
+
+
+def _generate_focus_report(analysis: Dict[str, Any], mode: str = "standard") -> str:
+    mode_config = MODE_CONFIGS[normalize_mode(mode)]
+    config = load_config()
+    return "".join([
+        _generate_core_summary(analysis, mode_config),
+        _generate_primary_risk_section(analysis, mode_config, config),
+        _generate_benchmark_section(analysis, mode_config),
+        _generate_prioritized_actions(analysis, mode_config),
+    ])
+
+
 # ============================================================
 # 主入口
 # ============================================================
@@ -713,47 +946,45 @@ def generate_report(analysis: Dict, mode: str = "standard") -> str:
 
 
 def _generate_dual_report(analysis: Dict, mode: str = "standard") -> str:
-    """生成双维度报告"""
+    """生成默认定向处置报告。"""
     metadata = analysis.get("metadata", {})
     data_date = metadata.get("data_date", "全量数据")
     generated_at = datetime.now().strftime("%Y-%m-%d %H:%M")
+    fullvolume_analysis = analysis.get("fullvolume_analysis") or {}
+    full_meta = fullvolume_analysis.get("metadata", {})
 
-    header = f"""# 舆情监测报告
+    primary_targets = " / ".join(full_meta.get("primary_targets", [])) or "北京中关村学院 / 中关村人工智能研究院"
+    benchmark_targets = " / ".join(full_meta.get("benchmark_targets", [])) or "深圳河套研究院 / 上海创智研究院"
+
+    header = f"""# 定向舆情处置报告
 
 > **生成时间**：{generated_at} | **数据范围**：{data_date}
+> **主监控对象**：{primary_targets}
+> **兄弟机构对比**：{benchmark_targets}
 
 ---
 
 """
 
-    fullvolume_analysis = analysis.get("fullvolume_analysis")
-
-    account_section = ""
-    if "account_analysis" in analysis:
-        account_section = generate_account_report(analysis["account_analysis"], fullvolume_analysis, mode=mode)
-
-    fullvolume_section = ""
-    if fullvolume_analysis is not None:
-        fullvolume_section = generate_fullvolume_report(fullvolume_analysis, mode=mode)
-
-    return header + account_section + fullvolume_section
+    if fullvolume_analysis:
+        return header + _generate_focus_report(fullvolume_analysis, mode=mode)
+    return header + "## 一、核心结论\n\n当前没有可用的高相关舆情数据。\n"
 
 
 def _generate_legacy_report(analysis: Dict, mode: str = "standard") -> str:
-    """旧版单维度报告（向后兼容）"""
-    # 简化：只生成执行摘要 + 风险 + 全网维度
+    """旧版兼容入口，统一走定向处置报告。"""
     metadata = analysis.get("metadata", {})
     data_date = metadata.get("data_date", "全量数据")
     generated_at = datetime.now().strftime("%Y-%m-%d %H:%M")
 
-    header = f"""# 舆情监测报告（全网维度）
+    header = f"""# 定向舆情处置报告
 
 > **生成时间**：{generated_at} | **数据范围**：{data_date}
 
 ---
 
 """
-    return header + generate_fullvolume_report(analysis, mode=mode)
+    return header + _generate_focus_report(analysis, mode=mode)
 
 
 # ============================================================

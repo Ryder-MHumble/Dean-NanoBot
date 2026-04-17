@@ -31,6 +31,7 @@ class LiteLLMProvider(LLMProvider):
         super().__init__(api_key, api_base)
         self.default_model = default_model
         self.extra_headers = extra_headers or {}
+        self._provider_name = provider_name
         
         # Detect gateway / local deployment.
         # provider_name (from config key) is the primary signal;
@@ -77,9 +78,26 @@ class LiteLLMProvider(LLMProvider):
             prefix = self._gateway.litellm_prefix
             if self._gateway.strip_model_prefix:
                 model = model.split("/")[-1]
+
+            # OpenRouter convenience aliases for Xiaomi models.
+            # This lets users set `mimo-v2-pro` / `mimo-v2-omni` directly.
+            if self._gateway.name == "openrouter":
+                model_lower = model.lower()
+                if "/" not in model and model_lower in {"mimo-v2-pro", "mimo-v2-omni"}:
+                    model = f"xiaomi/{model}"
+
             if prefix and not model.startswith(f"{prefix}/"):
                 model = f"{prefix}/{model}"
             return model
+
+        # OpenAI-compatible custom endpoints may use non-gpt model IDs
+        # (e.g. "mimo-v2-pro"). LiteLLM requires explicit provider prefix.
+        if (
+            self._provider_name == "openai"
+            and self.api_base
+            and "/" not in model
+        ):
+            return f"openai/{model}"
         
         # Standard mode: auto-prefix for known providers
         spec = find_by_model(model)

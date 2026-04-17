@@ -1,6 +1,8 @@
 """Configuration loading utilities."""
 
 import json
+import os
+import re
 from pathlib import Path
 from typing import Any
 
@@ -35,7 +37,9 @@ def load_config(config_path: Path | None = None) -> Config:
             with open(path) as f:
                 data = json.load(f)
             data = _migrate_config(data)
-            return Config.model_validate(convert_keys(data))
+            data = convert_keys(data)
+            _apply_env_overrides(data)
+            return Config.model_validate(data)
         except (json.JSONDecodeError, ValueError) as e:
             print(f"Warning: Failed to load config from {path}: {e}")
             print("Using default configuration.")
@@ -70,6 +74,51 @@ def _migrate_config(data: dict) -> dict:
     if "restrictToWorkspace" in exec_cfg and "restrictToWorkspace" not in tools:
         tools["restrictToWorkspace"] = exec_cfg.pop("restrictToWorkspace")
     return data
+
+
+def _parse_env_value(value: str) -> Any:
+    """Parse basic scalar types from env strings."""
+    lower = value.lower()
+    if lower in {"true", "false"}:
+        return lower == "true"
+    if re.fullmatch(r"[+-]?\d+", value):
+        try:
+            return int(value)
+        except ValueError:
+            return value
+    if re.fullmatch(r"[+-]?(\d+\.\d*|\d*\.\d+)", value):
+        try:
+            return float(value)
+        except ValueError:
+            return value
+    return value
+
+
+def _set_nested_value(data: dict[str, Any], path: list[str], value: Any) -> None:
+    """Set nested dict value by key path, creating intermediate dicts if needed."""
+    cur: dict[str, Any] = data
+    for key in path[:-1]:
+        next_val = cur.get(key)
+        if not isinstance(next_val, dict):
+            next_val = {}
+            cur[key] = next_val
+        cur = next_val
+    cur[path[-1]] = value
+
+
+def _apply_env_overrides(data: dict[str, Any]) -> None:
+    """Apply NANOBOT_ env vars as config overrides (NANOBOT_A__B__C)."""
+    prefix = "NANOBOT_"
+    for env_key, env_val in os.environ.items():
+        if not env_key.startswith(prefix):
+            continue
+        path_raw = env_key[len(prefix):]
+        if not path_raw:
+            continue
+        keys = [k.lower() for k in path_raw.split("__") if k]
+        if not keys:
+            continue
+        _set_nested_value(data, keys, _parse_env_value(env_val))
 
 
 def convert_keys(data: Any) -> Any:
