@@ -172,7 +172,7 @@ config = {
         "defaults": {
             "workspace": "~/.nanobot/workspace",
             "model": os.environ.get("NANOBOT_AGENTS__DEFAULTS__MODEL",
-                                    "openrouter/anthropic/claude-haiku-4.5"),
+                                    "openrouter/z-ai/glm-5-turbo"),
             "maxTokens": 8192,
             "temperature": 0.7,
             "maxToolIterations": 20
